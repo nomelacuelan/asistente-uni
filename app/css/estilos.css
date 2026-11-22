@@ -381,3 +381,24 @@ body.en-chat main { padding-bottom: 0; }
 
 .tarjeta.verde .clase .horas small { color: rgb(255 255 255 / 0.75); }
 .tarjeta.verde .clase .barra { box-shadow: 0 0 0 1px rgb(255 255 255 / 0.5); }
+
+/* ---------- contador de faltas de laboratorio ---------- */
+.contador-faltas h2 { margin-bottom: 4px; }
+.contador { display: flex; align-items: center; justify-content: center; gap: 22px; margin: 6px 0; }
+.contador .cifra { display: flex; flex-direction: column; align-items: center; min-width: 70px; }
+.contador .cifra b { font-size: 2.6rem; line-height: 1; }
+.contador .cifra span { color: var(--suave); font-size: 0.85rem; }
+.boton-redondo {
+  width: 56px; height: 56px; border-radius: 50%; border: 0; cursor: pointer; font-size: 1.8rem; font-weight: 700; line-height: 1;
+  background: var(--acento-suave); color: var(--acento);
+}
+.boton-redondo.mas { background: var(--acento); color: var(--acento-texto); }
+.boton-redondo:disabled, .boton-icono:disabled { opacity: 0.35; cursor: default; }
+.estado-faltas { text-align: center; margin: 2px 0 8px; font-weight: 600; color: var(--ok); }
+.contador-faltas.justo .estado-faltas { color: var(--aviso); }
+.contador-faltas.pasado .estado-faltas { color: var(--peligro); }
+.contador-faltas:not(.bien):not(.justo):not(.pasado) .estado-faltas { color: var(--suave); font-weight: 400; }
+.fila-maximo { display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 8px; border-top: 1px solid var(--linea); }
+.fila-maximo .boton-icono { width: 36px; height: 36px; font-size: 1rem; }
+.fila-maximo b { min-width: 20px; text-align: center; }
+.enlace { display: block; margin: 8px auto 0; border: 0; background: none; color: var(--acento); font-weight: 600; cursor: pointer; padding: 6px; }

@@ -1,6 +1,6 @@
 // Permite abrir la app sin conexión y la mantiene siempre actualizada.
 // Cuando subas una versión nueva, cambia el número de VERSION (y VERSION_APP en js/app.js).
-const VERSION = 'asistente-uni-v9';
+const VERSION = 'asistente-uni-v10';
 const ARCHIVOS = [
   './',
   './index.html',

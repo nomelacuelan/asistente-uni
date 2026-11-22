@@ -512,3 +512,20 @@ test('la IA puede usar calificaciones, faltas y tareas', async () => {
   assert.equal((await ejecutar(datos, 'ver_tareas', {})).length, 0);
   assert.match(datos.contexto(), /Física: 1 faltas de 3 permitidas/);
 });
+
+test('faltas: sumar varias el mismo día con ＋ y restar la última con −', async () => {
+  const { datos } = nuevo();
+  await datos.guardarAsignatura({ nombre: 'Química', max_faltas_laboratorio: 3 });
+  const id = datos.buscarAsignatura('Química').id;
+  await datos.registrarFalta({ asignatura: 'Química', fecha: '2026-11-10', clase_id: 7 });
+  await datos.registrarFalta({ asignatura: 'Química', manual: true });
+  await datos.registrarFalta({ asignatura: 'Química', manual: true });
+  assert.equal(datos.resumenFaltas(id).faltas, 3, 'el ＋ suma aunque sea el mismo día');
+  assert.equal(datos.resumenFaltas(id).lista.at(-1).fecha, hoy());
+  const r = await datos.restarFalta(id);
+  assert.equal(r.quitada.fecha, hoy(), 'quita la más reciente');
+  await datos.restarFalta(id);
+  assert.deepEqual(datos.resumenFaltas(id).fechas, ['2026-11-10']);
+  await datos.restarFalta(id);
+  assert.equal((await datos.restarFalta(id)).ok, false, 'no baja de 0');
+});

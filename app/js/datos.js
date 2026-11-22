@@ -588,16 +588,30 @@ export function crearDatos(almacen) {
 
   // ---------- faltas de laboratorio ----------
 
-  async function registrarFalta({ asignatura, fecha, clase_id, nota }) {
+  /**
+   * Apunta una falta de laboratorio. Con `manual: true` (botón ＋) se puede sumar más de una el mismo día;
+   * si no, una misma clase en el mismo día no se cuenta dos veces.
+   */
+  async function registrarFalta({ asignatura, fecha, clase_id, nota, manual = false }) {
     const asig = buscarAsignatura(asignatura);
     if (!asig) throw new Error(`No encuentro la asignatura "${asignatura}"`);
-    const f = validarFecha(fecha).slice(0, 10);
-    if (e().faltas.some((x) => x.asignaturaId === asig.id && x.fecha === f && (x.claseId ?? null) === (clase_id ?? null))) {
+    const f = validarFecha(fecha || hoy()).slice(0, 10);
+    if (!manual && e().faltas.some((x) => x.asignaturaId === asig.id && x.fecha === f && (x.claseId ?? null) === (clase_id ?? null))) {
       return { ok: true, repetida: true, ...resumenFaltas(asig.id) };
     }
-    e().faltas.push({ id: almacen.nuevoId(), asignaturaId: asig.id, fecha: f, claseId: clase_id ?? null, nota: limpio(nota) });
+    e().faltas.push({ id: almacen.nuevoId(), asignaturaId: asig.id, fecha: f, claseId: clase_id ?? null, nota: limpio(nota), manual: Boolean(manual) });
     await guardar();
     return { ok: true, ...resumenFaltas(asig.id) };
+  }
+
+  /** Botón −: quita la falta más reciente de la asignatura. */
+  async function restarFalta(asignaturaId) {
+    const lista = e().faltas.filter((f) => f.asignaturaId === asignaturaId);
+    if (!lista.length) return { ok: false };
+    const ultima = lista.sort((x, y) => y.fecha.localeCompare(x.fecha) || y.id - x.id)[0];
+    e().faltas = e().faltas.filter((f) => f.id !== ultima.id);
+    await guardar();
+    return { ok: true, quitada: ultima };
   }
 
   async function quitarFalta(id) {
@@ -806,7 +820,7 @@ export function crearDatos(almacen) {
     crearClase, verHorario, modificarClase, borrarClase, cambiarClaseDia, borrarCambioClase, clasesDelDia,
     crearNota, modificarNota, borrarNota, buscarNotas,
     guardarCalificacion, borrarCalificacion, calcularNota, verCalificaciones,
-    registrarFalta, quitarFalta, resumenFaltas, alertasFaltas,
+    registrarFalta, restarFalta, quitarFalta, resumenFaltas, alertasFaltas,
     crearTarea, modificarTarea, borrarTarea, verTareas,
     semanasCargadas, proximaClase, colorDe, colorPorNombre,
     resumenDiario, contexto, bonito,

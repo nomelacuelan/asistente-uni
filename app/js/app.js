@@ -6,7 +6,7 @@ import { crearICS, enlaceGoogle, enlaceGoogleRecordatorio } from './calendario.j
 import { ahora, hoy, bonito, diasHasta, tieneHora, sumarDias, aDate } from './fechas.js';
 
 // Número de versión que se ve en Ajustes (súbelo junto con VERSION en sw.js)
-const VERSION_APP = 9;
+const VERSION_APP = 10;
 
 let almacen;
 try {
@@ -190,9 +190,9 @@ function hojaCalendario({ eventos = [], recordatorios = [], titulo }) {
 
 // ---------- navegación ----------
 
-const VISTAS = { hoy: vistaHoy, horario: vistaHorario, chat: vistaChat, agenda: vistaAgenda, mas: vistaMas, notas: vistaNotas, tareas: vistaTareas, calificaciones: vistaCalificaciones, anadir: vistaAnadir, ajustes: vistaAjustes };
-const TITULOS = { hoy: 'Hoy', horario: 'Horario', chat: 'Chat', agenda: 'Agenda', mas: 'Más', notas: 'Notas', tareas: 'Tareas', calificaciones: 'Calificaciones', anadir: 'Añadir información', ajustes: 'Ajustes' };
-const PESTANA_DE = { notas: 'mas', tareas: 'mas', calificaciones: 'mas', anadir: 'mas', ajustes: 'mas' }; // subpáginas de la pestaña Más
+const VISTAS = { hoy: vistaHoy, horario: vistaHorario, chat: vistaChat, agenda: vistaAgenda, mas: vistaMas, notas: vistaNotas, tareas: vistaTareas, calificaciones: vistaCalificaciones, faltas: vistaFaltas, anadir: vistaAnadir, ajustes: vistaAjustes };
+const TITULOS = { hoy: 'Hoy', horario: 'Horario', chat: 'Chat', agenda: 'Agenda', mas: 'Más', notas: 'Notas', tareas: 'Tareas', calificaciones: 'Calificaciones', faltas: 'Faltas de laboratorio', anadir: 'Añadir información', ajustes: 'Ajustes' };
+const PESTANA_DE = { notas: 'mas', tareas: 'mas', calificaciones: 'mas', faltas: 'mas', anadir: 'mas', ajustes: 'mas' }; // subpáginas de la pestaña Más
 let vistaActual = 'hoy';
 
 function render() {
@@ -343,7 +343,7 @@ function vistaHoy() {
       <p>Dale a la app la información de tus asignaturas: escríbela, pega la web de la uni o sube el PDF del calendario de exámenes.</p>
       <div class="fila-botones"><a class="boton" href="#anadir">➕ Añadir información</a><a class="boton secundario" href="#chat">💬 Contárselo al chat</a></div></div>` : ''}
 
-    ${alertasFaltas.map((f) => `<div class="tarjeta alerta"><h2>🚫 Faltas de laboratorio · ${esc(f.asignatura)}</h2><p style="margin:0">Llevas ${f.faltas} de ${f.maximo}. ${f.quedan < 0 ? '⚠️ Has pasado el máximo.' : f.quedan === 0 ? '⚠️ No puedes faltar más.' : 'Solo te queda 1.'}</p></div>`).join('')}
+    ${alertasFaltas.map((f) => `<a class="tarjeta alerta" href="#faltas" style="display:block;color:inherit;text-decoration:none"><h2>🚫 Faltas de laboratorio · ${esc(f.asignatura)}</h2><p style="margin:0">Llevas ${f.faltas} de ${f.maximo}. ${f.quedan < 0 ? '⚠️ Has pasado el máximo.' : f.quedan === 0 ? '⚠️ No puedes faltar más.' : 'Solo te queda 1.'}</p></a>`).join('')}
 
     ${cargadas.map((w) => `<div class="tarjeta alerta"><h2>⚠️ Semana cargada: ${esc(fechaCorta(w.desde).replace(/,.*/, ''))} – ${esc(fechaCorta(w.hasta).replace(/,.*/, ''))}</h2>
       <p style="margin:0 0 6px">${w.eventos.length} exámenes y entregas${diasHasta(w.desde) > 0 ? ` · empieza ${cuandoRelativo(w.desde)}` : ' · es esta semana'}. ¡Organízate con tiempo!</p>
@@ -1420,6 +1420,7 @@ function vistaMas() {
       <a href="#tareas"><span class="grande">✅</span><b>Tareas</b><span class="suave">${pendientes} pendientes</span></a>
       <a href="#notas"><span class="grande">📝</span><b>Notas</b><span class="suave">${E().notas.length} notas</span></a>
       <a href="#calificaciones"><span class="grande">🎯</span><b>Calificaciones</b><span class="suave">Calcula qué necesitas para aprobar</span></a>
+      <a href="#faltas"><span class="grande">🚫</span><b>Faltas de laboratorio</b><span class="suave">${E().faltas.length} apuntadas</span></a>
       <a href="#anadir"><span class="grande">➕</span><b>Añadir información</b><span class="suave">Texto, web, archivos e imágenes</span></a>
       <a href="#agenda" id="ir-asig"><span class="grande">🎓</span><b>Asignaturas</b><span class="suave">${E().asignaturas.length} asignaturas</span></a>
       <a href="#ajustes"><span class="grande">⚙️</span><b>Ajustes</b><span class="suave">IA, tema, avisos, copias</span></a>
@@ -1531,6 +1532,85 @@ function hojaTarea(t = null) {
       }
     },
   );
+}
+
+// =====================================================================
+// FALTAS DE LABORATORIO (contador con ＋ y −)
+// =====================================================================
+
+const faltasAbiertas = new Set(); // asignaturas con la lista de fechas desplegada
+
+function vistaFaltas() {
+  if (vistaActual !== 'faltas') return;
+  const asigs = datos.verAsignaturas();
+  if (!asigs.length) {
+    contenido.innerHTML = '<div class="tarjeta"><p class="vacio">Primero añade tus asignaturas (📅 Agenda → Asignaturas).</p></div>';
+    return;
+  }
+  contenido.innerHTML = `
+    <p class="suave" style="margin:0">Pulsa <b>＋</b> cuando faltes a un laboratorio y <b>−</b> para quitar la última. Abajo de cada asignatura puedes poner cuántas faltas te permiten.</p>
+    ${asigs.map((a) => {
+      const r = datos.resumenFaltas(a.id);
+      const estado = r.maximo === null ? '' : r.quedan < 0 ? 'pasado' : r.quedan <= 1 ? 'justo' : 'bien';
+      const texto = r.maximo === null ? 'Sin máximo indicado' : r.quedan < 0 ? `⚠️ Te has pasado ${-r.quedan}` : r.quedan === 0 ? '⚠️ No puedes faltar más' : `Te ${r.quedan === 1 ? 'queda 1 falta' : `quedan ${r.quedan} faltas`}`;
+      const abierta = faltasAbiertas.has(a.id);
+      return `<div class="tarjeta contador-faltas ${estado}" style="border-left:6px solid ${a.color || 'var(--acento)'}">
+        <h2>${esc(a.nombre)}</h2>
+        <div class="contador">
+          <button class="boton-redondo" data-menos="${a.id}" aria-label="Quitar una falta" ${r.faltas ? '' : 'disabled'}>−</button>
+          <div class="cifra"><b>${r.faltas}</b><span>${r.maximo !== null ? `de ${r.maximo}` : r.faltas === 1 ? 'falta' : 'faltas'}</span></div>
+          <button class="boton-redondo mas" data-mas="${a.id}" aria-label="Sumar una falta">＋</button>
+        </div>
+        <p class="estado-faltas">${texto}</p>
+        <div class="fila-maximo">
+          <span class="suave pequeno">Máximo permitido:</span>
+          <button class="boton-icono" data-max-menos="${a.id}" aria-label="Bajar el máximo" ${r.maximo === null ? 'disabled' : ''}>−</button>
+          <b>${r.maximo ?? '—'}</b>
+          <button class="boton-icono" data-max-mas="${a.id}" aria-label="Subir el máximo">＋</button>
+        </div>
+        ${r.faltas ? `<button class="enlace" data-ver-fechas="${a.id}">${abierta ? 'Ocultar fechas ▲' : 'Ver fechas ▼'}</button>
+          ${abierta ? `<ul class="lista">${[...r.lista].reverse().map((f) => `<li class="elemento"><div class="cuerpo">${esc(bonito(f.fecha))}${f.nota ? ` · ${esc(f.nota)}` : ''}</div><button class="boton-icono" data-quitar-falta="${f.id}" aria-label="Quitar esta falta">✕</button></li>`).join('')}</ul>` : ''}` : ''}
+      </div>`;
+    }).join('')}
+    <p class="suave pequeno">💡 También puedes marcarlas tocando la clase de laboratorio en 🗓️ Horario, o decírselo al chat: <i>"falté al laboratorio de Química el lunes"</i>.</p>`;
+
+  const nombre = (id) => E().asignaturas.find((a) => a.id === Number(id)).nombre;
+  for (const b of $$('[data-mas]')) {
+    b.onclick = async () => {
+      const r = await datos.registrarFalta({ asignatura: nombre(b.dataset.mas), fecha: hoy(), manual: true });
+      if (r.maximo !== null && r.quedan <= 0) aviso(r.quedan < 0 ? '⚠️ Has pasado el máximo de faltas' : '⚠️ Has llegado al máximo de faltas', 5000);
+      vistaFaltas();
+    };
+  }
+  for (const b of $$('[data-menos]')) {
+    b.onclick = async () => {
+      await datos.restarFalta(Number(b.dataset.menos));
+      vistaFaltas();
+    };
+  }
+  const cambiarMaximo = async (id, delta) => {
+    const a = E().asignaturas.find((x) => x.id === Number(id));
+    const actual = a.maxFaltasLab;
+    const nuevo = actual === null || actual === undefined ? (delta > 0 ? 1 : null) : actual + delta < 0 ? null : actual + delta;
+    await datos.guardarAsignatura({ nombre: a.nombre, max_faltas_laboratorio: nuevo });
+    vistaFaltas();
+  };
+  for (const b of $$('[data-max-mas]')) b.onclick = () => cambiarMaximo(b.dataset.maxMas, 1);
+  for (const b of $$('[data-max-menos]')) b.onclick = () => cambiarMaximo(b.dataset.maxMenos, -1);
+  for (const b of $$('[data-ver-fechas]')) {
+    b.onclick = () => {
+      const id = Number(b.dataset.verFechas);
+      if (faltasAbiertas.has(id)) faltasAbiertas.clear();
+      else faltasAbiertas.add(id);
+      vistaFaltas();
+    };
+  }
+  for (const b of $$('[data-quitar-falta]')) {
+    b.onclick = async () => {
+      await datos.quitarFalta(b.dataset.quitarFalta);
+      vistaFaltas();
+    };
+  }
 }
 
 // =====================================================================
