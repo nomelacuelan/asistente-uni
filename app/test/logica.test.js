@@ -113,7 +113,7 @@ test('calendario: .ics con alarmas y enlace de Google', async () => {
 function geminiFalso(respuestas) {
   const peticiones = [];
   const fetchImpl = async (url, op) => {
-    peticiones.push({ url, headers: op.headers, cuerpo: JSON.parse(op.body) });
+    peticiones.push({ url, headers: op.headers, cuerpo: op.body ? JSON.parse(op.body) : null });
     const r = respuestas.shift();
     if (r.status) return { ok: false, status: r.status, json: async () => r.json };
     return { ok: true, status: 200, json: async () => r };
@@ -245,4 +245,41 @@ test('la IA puede gestionar horario y notas con sus herramientas', async () => {
   assert.equal((await ejecutar(datos, 'buscar_notas', { texto: 'calculadora' })).length, 1);
   await ejecutar(datos, 'borrar_asignatura', { nombre: 'Física' });
   assert.equal(datos.verHorario().length, 0, 'borrar la asignatura quita sus clases');
+});
+
+// ---------- elección automática del modelo ----------
+
+test('elegirModelo: prefiere el flash estable más nuevo', async () => {
+  const { elegirModelo } = await import('../js/ia.js');
+  const lista = ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash-preview-09-2026', 'gemini-3.8-flash', 'gemini-3.8-flash-tts', 'gemini-3.5-pro', 'embedding-001'];
+  assert.equal(elegirModelo(lista), 'gemini-3.8-flash');
+  assert.equal(elegirModelo(lista, ['gemini-3.8-flash']), 'gemini-3.6-flash');
+  assert.equal(elegirModelo(['gemini-3.5-flash-lite', 'gemini-2.5-pro']), 'gemini-3.5-flash-lite');
+  assert.equal(elegirModelo([]), null);
+});
+
+test('si el modelo no existe para tu clave, la app elige otro sola y lo recuerda', async () => {
+  const { datos, almacen } = nuevo();
+  almacen.estado.ajustes.modelo = 'gemini-que-no-existe';
+  const g = geminiFalso([
+    { status: 404, json: { error: { message: 'models/gemini-que-no-existe is not found for API version v1beta' } } },
+    { models: [{ name: 'models/gemini-3.6-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] }] },
+    respTexto('¡Hola!'),
+  ]);
+  const r = await conversar({ datos, almacen, texto: 'hola', fetchImpl: g.fetchImpl });
+  assert.equal(r.texto, '¡Hola!');
+  assert.equal(almacen.estado.ajustes.modelo, 'gemini-3.6-flash');
+  assert.match(g.peticiones[2].url, /gemini-3\.6-flash:generateContent$/);
+});
+
+test('modelo sin cuota gratuita (limit: 0) → cambia a otro', async () => {
+  const { almacen } = nuevo();
+  const { probarClave } = await import('../js/ia.js');
+  const g = geminiFalso([
+    { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] },
+    { status: 429, json: { error: { message: 'Quota exceeded for metric: generate_content_free_tier_requests, limit: 0' } } },
+    { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-3.5-flash-lite', supportedGenerationMethods: ['generateContent'] }] },
+    respTexto('OK'),
+  ]);
+  assert.equal(await probarClave(almacen.estado.ajustes, g.fetchImpl), 'gemini-3.5-flash-lite');
 });

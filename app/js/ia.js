@@ -8,19 +8,70 @@ const MAX_PASOS = 12;
 
 export class ErrorIA extends Error {}
 
-/** Llamada básica a Gemini, con reintentos si está saturado. */
-export async function llamarGemini({ apiKey, modelo, sistema, contents, tools, temperatura = 0.3, fetchImpl = globalThis.fetch }) {
-  if (!apiKey) throw new ErrorIA('Falta tu clave de IA. Ve a ⚙️ Ajustes y pégala (es gratis).');
+/** Lista los modelos que tu clave puede usar para generar texto. */
+export async function listarModelos(apiKey, fetchImpl = globalThis.fetch) {
+  let res;
+  try {
+    res = await fetchImpl(`${URL_API}?pageSize=200`, { headers: { 'x-goog-api-key': apiKey } });
+  } catch {
+    throw new ErrorIA('Sin conexión a internet.');
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw errorDeGoogle(res.status, json.error?.message || `error ${res.status}`, '');
+  return (json.models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m) => m.name.replace(/^models\//, ''));
+}
+
+/** Elige el mejor modelo "flash" estable de la lista (el de versión más alta). */
+export function elegirModelo(nombres, evitar = []) {
+  const version = (n) => (n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] * 1 || 0;
+  const candidatos = nombres.filter((n) => /^gemini-/.test(n) && !evitar.includes(n) && !/(tts|image|audio|live|embedding|robotics|computer|native)/i.test(n));
+  const orden = (lista) => lista.sort((a, b) => version(b) - version(a) || a.length - b.length);
+  const estables = candidatos.filter((n) => !/(preview|exp|latest)/i.test(n));
+  return (
+    orden(estables.filter((n) => /-flash$/.test(n)))[0] ||
+    orden(estables.filter((n) => /flash/.test(n) && !/lite/.test(n)))[0] ||
+    orden(estables.filter((n) => /flash/.test(n)))[0] ||
+    orden(candidatos.filter((n) => /flash/.test(n)))[0] ||
+    orden(candidatos)[0] ||
+    null
+  );
+}
+
+function errorDeGoogle(status, msg, modelo) {
+  if (status === 429) return new ErrorIA('⏳ Has llegado al límite gratuito de la IA por ahora. Prueba en un minuto (o mañana si es el límite diario).');
+  if ((status === 400 || status === 403) && /api[ _-]?key/i.test(msg)) return new ErrorIA('🔑 La clave de IA no es válida. Cópiala otra vez de aistudio.google.com/apikey y pégala en ☰ Más → ⚙️ Ajustes.');
+  if (/location is not supported/i.test(msg)) return new ErrorIA('🌍 Google no permite usar su IA gratuita desde tu ubicación actual.');
+  if (status === 403) return new ErrorIA(`🔑 Google ha rechazado la clave: ${msg}`);
+  if (status === 404) return new ErrorIA(`El modelo "${modelo}" no está disponible para tu clave. Pulsa "Probar" en ⚙️ Ajustes para elegir uno automáticamente.`);
+  return new ErrorIA(`La IA ha dado un error (${status}): ${msg}`);
+}
+
+// Errores que indican que ESE modelo no se puede usar (pero otro sí)
+const modeloNoSirve = (status, msg) =>
+  status === 404 || (status === 400 && /(not found|not supported|is not available|unsupported model)/i.test(msg)) || (status === 429 && /limit:\s*0\b/i.test(msg));
+
+/**
+ * Llamada básica a Gemini, con reintentos si está saturado.
+ * Si el modelo configurado no existe o no es gratuito para tu clave, elige otro automáticamente
+ * y lo guarda en `ajustes.modelo`.
+ */
+export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents, tools, temperatura = 0.3, fetchImpl = globalThis.fetch }) {
+  ajustes ||= { apiKey, modelo };
+  if (!ajustes.apiKey) throw new ErrorIA('Falta tu clave de IA. Ve a ☰ Más → ⚙️ Ajustes y pégala (es gratis).');
+  ajustes.modelo ||= 'gemini-3.8-flash';
   const cuerpo = { contents, generationConfig: { temperature: temperatura } };
   if (sistema) cuerpo.systemInstruction = { parts: [{ text: sistema }] };
   if (tools) cuerpo.tools = tools;
+  const probados = [];
 
   for (let intento = 0; ; intento++) {
     let res;
     try {
-      res = await fetchImpl(`${URL_API}/${encodeURIComponent(modelo)}:generateContent`, {
+      res = await fetchImpl(`${URL_API}/${encodeURIComponent(ajustes.modelo)}:generateContent`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ajustes.apiKey },
         body: JSON.stringify(cuerpo),
       });
     } catch {
@@ -30,16 +81,21 @@ export async function llamarGemini({ apiKey, modelo, sistema, contents, tools, t
     if (res.ok) return json;
 
     const msg = json.error?.message || `error ${res.status}`;
+    if (modeloNoSirve(res.status, msg) && probados.length < 3) {
+      probados.push(ajustes.modelo);
+      const otro = elegirModelo(await listarModelos(ajustes.apiKey, fetchImpl), probados);
+      if (otro) {
+        console.warn(`Modelo ${ajustes.modelo} no disponible (${res.status}); uso ${otro}`);
+        ajustes.modelo = otro;
+        continue;
+      }
+    }
     const temporal = res.status === 429 || res.status === 500 || res.status === 503;
     if (temporal && intento < 2) {
       await new Promise((r) => setTimeout(r, 4000 * (intento + 1)));
       continue;
     }
-    if (res.status === 429) throw new ErrorIA('⏳ Has llegado al límite gratuito de la IA por ahora. Prueba en un minuto (o mañana si es el límite diario).');
-    if (res.status === 400 && /api key/i.test(msg)) throw new ErrorIA('🔑 La clave de IA no es válida. Revísala en ⚙️ Ajustes.');
-    if (res.status === 403) throw new ErrorIA(`🔑 Google ha rechazado la clave: ${msg}`);
-    if (res.status === 404) throw new ErrorIA(`El modelo "${modelo}" no existe o ya no está disponible. Cámbialo en ⚙️ Ajustes.`);
-    throw new ErrorIA(`La IA ha dado un error: ${msg}`);
+    throw errorDeGoogle(res.status, msg, ajustes.modelo);
   }
 }
 
@@ -90,8 +146,7 @@ export async function ejecutarConHerramientas({ datos, ajustes, contents, fetchI
   const acciones = [];
   for (let paso = 0; paso < MAX_PASOS; paso++) {
     const resp = await llamarGemini({
-      apiKey: ajustes.apiKey,
-      modelo: ajustes.modelo,
+      ajustes,
       sistema: instrucciones(datos, ajustes),
       contents,
       tools: [{ functionDeclarations: declaraciones }],
@@ -152,7 +207,7 @@ Después, el contenido completo en texto, ordenado y fiel al original. No resuma
   } else {
     contents = [{ role: 'user', parts: [{ inlineData: { mimeType: archivo.mimeType, data: archivo.data } }, { text: pedido }] }];
   }
-  const resp = await llamarGemini({ apiKey: ajustes.apiKey, modelo: ajustes.modelo, contents, tools, temperatura: 0.1, fetchImpl });
+  const resp = await llamarGemini({ ajustes, contents, tools, temperatura: 0.1, fetchImpl });
   const texto = textoDe(resp);
   if (!texto) throw new ErrorIA(url ? 'No he podido leer esa web. Comprueba que el enlace es público, o copia y pega el texto.' : 'No he podido leer ese archivo.');
   const m = texto.match(/^\s*\**T[ÍI]TULO:?\**\s*(.+)\n/i);
@@ -185,8 +240,14 @@ ${contenido.slice(0, 100000)}`,
   return ejecutarConHerramientas({ datos, ajustes, contents, fetchImpl });
 }
 
-/** Comprueba que la clave funciona. */
+/**
+ * Comprueba que la clave funciona y elige un modelo disponible si el configurado no lo está.
+ * Modifica `ajustes.modelo` si hace falta. Devuelve el modelo que funciona.
+ */
 export async function probarClave(ajustes, fetchImpl) {
-  const r = await llamarGemini({ ...ajustes, contents: [{ role: 'user', parts: [{ text: 'Responde solo: OK' }] }], fetchImpl });
-  return textoDe(r);
+  if (!ajustes.apiKey) throw new ErrorIA('Pega primero la clave.');
+  const disponibles = await listarModelos(ajustes.apiKey, fetchImpl);
+  if (!disponibles.includes(ajustes.modelo)) ajustes.modelo = elegirModelo(disponibles) || ajustes.modelo;
+  await llamarGemini({ ajustes, contents: [{ role: 'user', parts: [{ text: 'Responde solo: OK' }] }], fetchImpl });
+  return ajustes.modelo;
 }

@@ -109,13 +109,25 @@ async function leerArchivo(file) {
   throw new Error(`No sé leer "${nombre}". Usa PDF, imagen o texto. (Si es un Word, guárdalo como PDF.)`);
 }
 
+/**
+ * Abre el selector de archivos / cámara del móvil.
+ * El campo se añade a la página (oculto) mientras se elige: en Android, si no está en la página,
+ * a veces el navegador lo descarta mientras estás en la galería y el archivo elegido se pierde.
+ */
 function elegirArchivo(accept, capture) {
   return new Promise((ok) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = accept;
-    if (capture) input.capture = 'environment';
-    input.onchange = () => ok(input.files?.[0] || null);
+    if (capture) input.setAttribute('capture', 'environment');
+    input.style.cssText = 'position:fixed;left:-9999px;width:1px;height:1px;opacity:0';
+    document.body.append(input);
+    const terminar = (archivo) => {
+      input.remove();
+      ok(archivo);
+    };
+    input.addEventListener('change', () => terminar(input.files?.[0] || null), { once: true });
+    input.addEventListener('cancel', () => terminar(null), { once: true });
     input.click();
   });
 }
@@ -1297,7 +1309,8 @@ function vistaAjustes() {
       <p class="suave pequeno">La IA es gratuita (Google Gemini). Consigue tu clave en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → <b>Create API key</b>, cópiala y pégala aquí. Se guarda solo en este móvil.</p>
       <label class="campo"><span>Clave de IA</span><input name="apiKey" type="password" autocomplete="off" value="${esc(a.apiKey)}" placeholder="AIza…"></label>
       <label class="campo"><span>Modelo</span><input name="modelo" value="${esc(a.modelo)}"></label>
-      <div class="fila-botones"><button class="boton" style="flex:1">Guardar</button><button type="button" class="boton secundario" id="probar" style="flex:1">Probar</button></div>
+      <div class="fila-botones"><button type="button" class="boton" id="probar" style="flex:2">Guardar y probar</button><button class="boton secundario" style="flex:1">Solo guardar</button></div>
+      <div id="estado-ia"></div>
     </form>
 
     <form class="tarjeta" id="f-avisos">
@@ -1339,24 +1352,30 @@ function vistaAjustes() {
   $('#f-ia').onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    a.apiKey = f.get('apiKey').trim();
-    a.modelo = f.get('modelo').trim() || 'gemini-3.8-flash';
+    a.apiKey = String(f.get('apiKey')).replace(/\s+/g, '');
+    a.modelo = String(f.get('modelo')).trim() || 'gemini-3.8-flash';
     await almacen.guardar();
-    aviso('✓ Guardado');
+    aviso('✓ Guardado. Pulsa "Probar" para comprobar que funciona.');
   };
-  $('#probar').onclick = async (e) => {
+  $('#probar').onclick = async () => {
+    const boton = $('#probar');
+    const estado = $('#estado-ia');
     const f = new FormData($('#f-ia'));
-    e.currentTarget.disabled = true;
+    // La clave se guarda siempre (aunque la prueba falle), quitando espacios y saltos de línea al pegar
+    a.apiKey = String(f.get('apiKey')).replace(/\s+/g, '');
+    a.modelo = String(f.get('modelo')).trim() || 'gemini-3.8-flash';
+    await almacen.guardar();
+    boton.disabled = true;
+    estado.innerHTML = '<p class="suave">Probando…</p>';
     try {
-      await probarClave({ apiKey: f.get('apiKey').trim(), modelo: f.get('modelo').trim() });
-      a.apiKey = f.get('apiKey').trim();
-      a.modelo = f.get('modelo').trim();
+      const modelo = await probarClave(a);
       await almacen.guardar();
-      aviso('✅ ¡Funciona! Clave guardada.');
+      $('#f-ia').modelo.value = modelo;
+      estado.innerHTML = `<div class="tarjeta destacada">✅ <b>¡Funciona!</b> Clave guardada. Modelo: ${esc(modelo)}</div>`;
     } catch (err) {
-      aviso(err.message, 7000);
+      estado.innerHTML = `<div class="tarjeta alerta">❌ ${esc(err.message)}</div>`;
     }
-    e.currentTarget.disabled = false;
+    boton.disabled = false;
   };
   $('#f-avisos').onsubmit = async (e) => {
     e.preventDefault();

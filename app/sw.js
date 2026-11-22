@@ -1,5 +1,5 @@
 // Permite abrir la app sin conexión. Cuando subas una versión nueva, cambia el número de VERSION.
-const VERSION = 'asistente-uni-v2';
+const VERSION = 'asistente-uni-v3';
 const ARCHIVOS = [
   './',
   './index.html',
