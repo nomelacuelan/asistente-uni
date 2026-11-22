@@ -1425,7 +1425,7 @@ function vistaAjustes() {
       $('#f-ia').modelo.value = modelo;
       estado.innerHTML = `<div class="tarjeta destacada">✅ <b>¡Funciona!</b> Clave guardada. Modelo: ${esc(modelo)}</div>`;
     } catch (err) {
-      estado.innerHTML = `<div class="tarjeta alerta">❌ ${esc(err.message)}</div>`;
+      estado.innerHTML = `<div class="tarjeta alerta" style="white-space:pre-wrap;overflow-wrap:anywhere">❌ ${esc(err.message)}</div>`;
     }
     boton.disabled = false;
   };

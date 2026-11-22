@@ -331,3 +331,61 @@ test('si todos los modelos están saturados, mensaje claro', async () => {
   await assert.rejects(conversar({ datos, almacen, texto: 'hola', fetchImpl: g.fetchImpl }), /saturados ahora mismo/);
   olvidarRespaldo();
 });
+
+// ---------- cuota (429) ----------
+
+const error429 = (quotaId, quotaValue, retryDelay) => ({
+  status: 429,
+  json: {
+    error: {
+      code: 429,
+      message: `You exceeded your current quota. Quota exceeded for metric: generate_content_free_tier_requests, limit: ${quotaValue}`,
+      details: [
+        { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId, quotaValue: String(quotaValue) }] },
+        ...(retryDelay ? [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay }] : []),
+      ],
+    },
+  },
+});
+const listaModelos = { models: ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'].map((n) => ({ name: `models/${n}`, supportedGenerationMethods: ['generateContent'] })) };
+
+test('429 con límite 0 en un modelo → prueba otro modelo gratuito', async () => {
+  const { olvidarRespaldo, probarClave } = await import('../js/ia.js');
+  olvidarRespaldo();
+  const ajustes = { apiKey: 'AQ.x', modelo: 'gemini-3.8-flash' };
+  const g = geminiFalso([listaModelos, error429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', 0), listaModelos, respTexto('OK')]);
+  assert.equal(await probarClave(ajustes, g.fetchImpl), 'gemini-3.6-flash');
+  olvidarRespaldo();
+});
+
+test('429 diario agotado → usa otro modelo (cada uno tiene su cuota)', async () => {
+  const { olvidarRespaldo } = await import('../js/ia.js');
+  olvidarRespaldo();
+  const { datos, almacen } = nuevo();
+  const g = geminiFalso([error429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', 20), listaModelos, respTexto('Hola')]);
+  const r = await conversar({ datos, almacen, texto: 'hola', fetchImpl: g.fetchImpl });
+  assert.equal(r.texto, 'Hola');
+  assert.match(g.peticiones[2].url, /gemini-3\.6-flash:/);
+  assert.equal(almacen.estado.ajustes.modelo, 'gemini-3.8-flash');
+  olvidarRespaldo();
+});
+
+test('429 en todos los modelos → mensaje con el detalle exacto de Google', async () => {
+  const { olvidarRespaldo } = await import('../js/ia.js');
+  olvidarRespaldo();
+  const { datos, almacen } = nuevo();
+  const e0 = error429('GenerateRequestsPerDayPerProjectPerModel-FreeTier', 0);
+  let llamadas = 0;
+  const fetchImpl = async (url, op) => {
+    llamadas++;
+    if (!op.method) return { ok: true, status: 200, json: async () => listaModelos };
+    return { ok: false, status: 429, json: async () => e0.json };
+  };
+  await assert.rejects(conversar({ datos, almacen, texto: 'hola', fetchImpl }), (err) => {
+    assert.match(err.message, /no tiene uso gratuito/);
+    assert.match(err.message, /Detalle de Google: GenerateRequestsPerDayPerProjectPerModel-FreeTier \(límite 0\)/);
+    return true;
+  });
+  assert.ok(llamadas < 15, 'no se queda reintentando sin fin');
+  olvidarRespaldo();
+});

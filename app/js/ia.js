@@ -39,8 +39,40 @@ export function elegirModelo(nombres, evitar = []) {
   );
 }
 
-function errorDeGoogle(status, msg, modelo) {
-  if (status === 429) return new ErrorIA('⏳ Has llegado al límite gratuito de la IA por ahora. Prueba en un minuto (o mañana si es el límite diario).');
+/** Lee los detalles de cuota que manda Google en un error 429. */
+export function analizarCuota(error = {}) {
+  const detalles = Array.isArray(error.details) ? error.details : [];
+  const violaciones = detalles.flatMap((d) => (String(d['@type']).includes('QuotaFailure') ? d.violations || [] : []));
+  const espera = detalles.find((d) => String(d['@type']).includes('RetryInfo'))?.retryDelay; // p. ej. "37s"
+  const ids = violaciones.map((v) => `${v.quotaId || ''} ${v.quotaMetric || ''}`).join(' ');
+  const texto = `${error.message || ''} ${ids}`;
+  return {
+    limiteCero: violaciones.some((v) => String(v.quotaValue) === '0') || /limit:\s*0\b/i.test(texto),
+    porDia: /per\s*day|PerDay/i.test(texto),
+    porMinuto: /per\s*minute|PerMinute/i.test(texto),
+    esperaSeg: espera ? Math.ceil(parseFloat(espera)) : null,
+    detalle: violaciones.length
+      ? violaciones.map((v) => `${v.quotaId || v.quotaMetric}${v.quotaValue !== undefined ? ` (límite ${v.quotaValue})` : ''}`).join('; ')
+      : String(error.message || '').slice(0, 200),
+  };
+}
+
+function errorDeGoogle(status, msg, modelo, error = {}, probados = []) {
+  if (status === 429) {
+    const c = analizarCuota(error);
+    const modelos = [...new Set([...probados, modelo])].join(', ');
+    let explicacion;
+    if (c.limiteCero) {
+      explicacion = `🔒 Google dice que tu proyecto no tiene uso gratuito para ${modelos === modelo ? `el modelo ${modelo}` : `los modelos ${modelos}`} (límite 0). Suele pasar con proyectos nuevos o importados que Google aún no ha verificado. Prueba a crear una clave en un PROYECTO NUEVO en aistudio.google.com/apikey, o mira tus límites en aistudio.google.com/rate-limit.`;
+    } else if (c.porDia) {
+      explicacion = `📅 Se ha agotado el límite diario gratuito de ${modelos}. Se reinicia a las 9:00 (hora de España).`;
+    } else if (c.porMinuto) {
+      explicacion = `⏳ Demasiadas peticiones en poco tiempo. Espera ${c.esperaSeg ? `${c.esperaSeg} segundos` : 'un minuto'} y vuelve a probar.`;
+    } else {
+      explicacion = `⏳ Google dice que se ha superado una cuota (probado con: ${modelos}). Mira tus límites en aistudio.google.com/rate-limit.`;
+    }
+    return new ErrorIA(`${explicacion}\n\nDetalle de Google: ${c.detalle}`);
+  }
   if ((status === 400 || status === 401 || status === 403) && /api[ _-]?key/i.test(msg)) return new ErrorIA('🔑 La clave de IA no es válida. Cópiala otra vez de aistudio.google.com/apikey y pégala en ☰ Más → ⚙️ Ajustes.');
   if (status === 401) {
     return new ErrorIA(`🔑 Google no acepta esta clave (${/ACCESS_TOKEN_TYPE_UNSUPPORTED/.test(msg) ? 'tipo de clave no admitido' : 'no autorizada'}). Prueba a crear una clave NUEVA en aistudio.google.com/apikey (botón "Create API key", en un proyecto nuevo) y pégala completa, incluido el "AQ." del principio.`);
@@ -53,8 +85,8 @@ function errorDeGoogle(status, msg, modelo) {
 }
 
 // Errores que indican que ESE modelo no se puede usar (pero otro sí)
-const modeloNoSirve = (status, msg) =>
-  status === 404 || (status === 400 && /(not found|not supported|is not available|unsupported model)/i.test(msg)) || (status === 429 && /limit:\s*0\b/i.test(msg));
+const modeloNoSirve = (status, msg, error) =>
+  status === 404 || (status === 400 && /(not found|not supported|is not available|unsupported model)/i.test(msg)) || (status === 429 && analizarCuota(error).limiteCero);
 
 /**
  * Llamada básica a Gemini, con reintentos si está saturado.
@@ -70,6 +102,7 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
   if (tools) cuerpo.tools = tools;
   const probados = [];
   const saturados = [];
+  const cuotas = [];
   // Si hace poco el modelo principal estaba saturado, se sigue usando el de reserva un rato
   // (así toda una conversación usa el mismo modelo)
   const reserva = respaldo.get(ajustes.apiKey);
@@ -92,7 +125,7 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
     const msg = json.error?.message || `error ${res.status}`;
 
     // 1) Ese modelo no existe o no es gratis para tu clave → se cambia para siempre
-    if (modeloNoSirve(res.status, msg) && probados.length < 3) {
+    if (modeloNoSirve(res.status, msg, json.error) && probados.length < 3) {
       probados.push(modeloUso);
       const otro = elegirModelo((await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null)) || [], probados);
       if (otro) {
@@ -120,12 +153,26 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
       }
     }
 
-    // 3) Límite por minuto → esperar un poco y reintentar
-    if (res.status === 429 && intento < 2) {
-      await new Promise((r) => setTimeout(r, 5000 * (intento + 1)));
-      continue;
+    // 3) Cuota superada (429). Cada modelo tiene su propia cuota gratuita, así que se prueba otro.
+    if (res.status === 429 && cuotas.length < 3) {
+      const c = analizarCuota(json.error);
+      // Límite por minuto con espera corta: esperar y reintentar el mismo modelo una vez
+      if (c.porMinuto && !c.porDia && !cuotas.includes(modeloUso) && (c.esperaSeg ?? 10) <= 20) {
+        cuotas.push(modeloUso);
+        await new Promise((r) => setTimeout(r, ((c.esperaSeg ?? 10) + 1) * 1000));
+        continue;
+      }
+      if (!cuotas.includes(modeloUso)) cuotas.push(modeloUso);
+      const lista = (await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null)) || MODELOS_RESERVA;
+      const otro = elegirModelo(lista, [...cuotas, ...probados, ...saturados]);
+      if (otro) {
+        console.warn(`Cuota agotada en ${modeloUso} (${c.detalle}); pruebo ${otro}`);
+        modeloUso = otro;
+        respaldo.set(ajustes.apiKey, { principal: ajustes.modelo, modelo: otro, hasta: Date.now() + (c.porDia ? 6 * 3600 : 15 * 60) * 1000 });
+        continue;
+      }
     }
-    throw errorDeGoogle(res.status, msg, modeloUso);
+    throw errorDeGoogle(res.status, msg, modeloUso, json.error, [...probados, ...cuotas]);
   }
 }
 
