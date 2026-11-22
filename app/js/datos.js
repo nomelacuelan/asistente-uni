@@ -14,6 +14,9 @@ export const NOMBRE_TIPO = {
 export const TIPOS_CLASE = ['teoria', 'laboratorio', 'practicas', 'seminario', 'otro'];
 export const NOMBRE_CLASE = { teoria: 'Teoría', laboratorio: 'Laboratorio', practicas: 'Prácticas', seminario: 'Seminario', otro: 'Otro' };
 export const ICONO_CLASE = { teoria: '📖', laboratorio: '🧪', practicas: '💻', seminario: '👥', otro: '📌' };
+// Colores para las asignaturas (se asignan solos y se pueden cambiar)
+export const COLORES = ['#0f8a6a', '#2f6fe0', '#d4871a', '#d6417f', '#7d4fd8', '#0e92ad', '#d64545', '#5f9c22', '#e0671f', '#64748b'];
+export const PRIORIDADES = ['alta', 'media', 'baja'];
 export const DIAS_SEMANA = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
 export const ICONO_TIPO = { examen: '📝', examen_laboratorio: '🧪', practica: '🔬', entrega: '📤', clase: '📚', otro: '📌' };
 
@@ -28,6 +31,13 @@ export function validarFecha(texto, campo = 'fecha') {
 export function crearDatos(almacen) {
   const e = () => almacen.estado;
   const guardar = () => almacen.guardar();
+
+  function colorLibre() {
+    const usados = new Set(e().asignaturas.map((a) => a.color));
+    return COLORES.find((c) => !usados.has(c)) || COLORES[e().asignaturas.length % COLORES.length];
+  }
+  // Asignaturas de copias antiguas sin color: se les pone uno
+  for (const a of e().asignaturas) if (!a.color) a.color = colorLibre();
 
   // ---------- asignaturas ----------
 
@@ -45,7 +55,7 @@ export function crearDatos(almacen) {
     if (!nombre || !nombre.trim()) return null;
     let a = buscarAsignatura(nombre);
     if (!a) {
-      a = { id: almacen.nuevoId(), nombre: nombre.trim(), curso: null, cuatrimestre: null, profesor: null, examen_final_lab: null, info: null };
+      a = { id: almacen.nuevoId(), nombre: nombre.trim(), curso: null, cuatrimestre: null, profesor: null, examen_final_lab: null, info: null, color: colorLibre(), maxFaltasLab: null, objetivo: 5 };
       e().asignaturas.push(a);
     }
     return a;
@@ -62,6 +72,9 @@ export function crearDatos(almacen) {
     for (const campo of ['curso', 'cuatrimestre', 'profesor']) if (a[campo] !== undefined) asig[campo] = limpio(a[campo]);
     if (a.tiene_examen_final_laboratorio !== undefined) asig.examen_final_lab = a.tiene_examen_final_laboratorio;
     if (a.info !== undefined) asig.info = a.anadir_info && asig.info ? `${asig.info}\n${a.info}` : limpio(a.info);
+    if (a.color && COLORES.includes(a.color)) asig.color = a.color;
+    if (a.max_faltas_laboratorio !== undefined) asig.maxFaltasLab = a.max_faltas_laboratorio === null || a.max_faltas_laboratorio === '' ? null : Math.max(0, Math.round(Number(a.max_faltas_laboratorio)));
+    if (a.nota_objetivo !== undefined && Number(a.nota_objetivo) > 0 && Number(a.nota_objetivo) <= 10) asig.objetivo = Number(a.nota_objetivo);
     await guardar();
     return { ok: true, asignatura: asig };
   }
@@ -81,6 +94,9 @@ export function crearDatos(almacen) {
     e().horario = e().horario.filter((c) => !idsClases.has(c.id));
     e().cambiosClase = e().cambiosClase.filter((c) => !idsClases.has(c.horarioId) && c.asignaturaId !== a.id);
     for (const n of e().notas) if (n.asignaturaId === a.id) n.asignaturaId = null;
+    for (const t of e().tareas) if (t.asignaturaId === a.id) t.asignaturaId = null;
+    e().calificaciones = e().calificaciones.filter((c) => c.asignaturaId !== a.id);
+    e().faltas = e().faltas.filter((f) => f.asignaturaId !== a.id);
     e().asignaturas = e().asignaturas.filter((x) => x.id !== a.id);
     await guardar();
     return { ok: true, eventos_borrados: idsEv.size };
@@ -497,6 +513,193 @@ export function crearDatos(almacen) {
     return lista.sort((x, y) => Number(y.fijada) - Number(x.fijada) || y.editado.localeCompare(x.editado) || y.id - x.id);
   }
 
+  // ---------- calificaciones (calculadora de notas) ----------
+
+  const numero = (x) => (x === null || x === undefined || x === '' ? null : Number(String(x).replace(',', '.')));
+
+  async function guardarCalificacion(a) {
+    const asig = a.asignatura ? buscarAsignatura(a.asignatura) || asignaturaOCrear(a.asignatura) : null;
+    let c = a.id ? e().calificaciones.find((x) => x.id === Number(a.id)) : null;
+    if (!c && asig && a.nombre) c = e().calificaciones.find((x) => x.asignaturaId === asig.id && x.nombre.toLowerCase() === a.nombre.trim().toLowerCase());
+    if (!c) {
+      if (!asig) throw new Error('Falta la asignatura');
+      if (!a.nombre?.trim()) throw new Error('Falta el nombre de la parte (por ejemplo "Examen final")');
+      c = { id: almacen.nuevoId(), asignaturaId: asig.id, nombre: a.nombre.trim(), peso: null, nota: null, minimo: null };
+      e().calificaciones.push(c);
+    }
+    if (a.id && a.nombre?.trim()) c.nombre = a.nombre.trim(); // renombrar solo si se edita por id
+    for (const [campo, clave, max] of [['peso', 'peso', 100], ['nota', 'nota', 10], ['minimo', 'nota_minima', 10]]) {
+      if (a[clave] === undefined) continue;
+      const v = numero(a[clave]);
+      if (v !== null && (!Number.isFinite(v) || v < 0 || v > max)) throw new Error(`${clave === 'peso' ? 'El peso' : 'La nota'} tiene que estar entre 0 y ${max}`);
+      c[campo] = v;
+    }
+    await guardar();
+    return { ok: true, id: c.id };
+  }
+
+  async function borrarCalificacion(id) {
+    const antes = e().calificaciones.length;
+    e().calificaciones = e().calificaciones.filter((x) => x.id !== Number(id));
+    await guardar();
+    return { ok: e().calificaciones.length < antes };
+  }
+
+  /** Cálculo de la nota de una asignatura: media actual, lo que llevas y lo que necesitas. */
+  function calcularNota(asignaturaId) {
+    const asig = e().asignaturas.find((a) => a.id === asignaturaId);
+    const partes = e().calificaciones.filter((c) => c.asignaturaId === asignaturaId);
+    const objetivo = asig?.objetivo || 5;
+    const conPeso = partes.filter((p) => p.peso !== null);
+    const pesoTotal = conPeso.reduce((s, p) => s + p.peso, 0);
+    const hechas = conPeso.filter((p) => p.nota !== null);
+    const pendientes = conPeso.filter((p) => p.nota === null);
+    const pesoHecho = hechas.reduce((s, p) => s + p.peso, 0);
+    const pesoPendiente = pendientes.reduce((s, p) => s + p.peso, 0);
+    const puntos = hechas.reduce((s, p) => s + (p.peso * p.nota) / 100, 0); // sobre 10
+    const suspensas = hechas.filter((p) => p.minimo !== null && p.nota < p.minimo);
+    const r = {
+      partes, objetivo, pesoTotal, pesoHecho, pesoPendiente,
+      llevas: Math.round(puntos * 100) / 100,
+      media: pesoHecho ? Math.round(((puntos * 100) / pesoHecho) * 100) / 100 : null,
+      notaFinal: pendientes.length === 0 && hechas.length ? Math.round(puntos * 100) / 100 : null,
+      suspensas: suspensas.map((p) => p.nombre),
+      necesitas: null, // nota media necesaria en lo que falta para llegar al objetivo
+      estado: 'sin datos',
+    };
+    if (!conPeso.length) return r;
+    if (pesoPendiente > 0) {
+      let n = ((objetivo - puntos) * 100) / pesoPendiente;
+      const minimoPendiente = Math.max(0, ...pendientes.map((p) => p.minimo ?? 0));
+      n = Math.max(n, minimoPendiente, 0);
+      r.necesitas = Math.round(n * 100) / 100;
+      r.estado = suspensas.length ? 'suspensa por mínimo' : n > 10 ? 'imposible' : n <= 0 ? 'asegurado' : 'en curso';
+    } else {
+      r.estado = suspensas.length ? 'suspensa por mínimo' : puntos >= objetivo ? 'conseguido' : puntos >= 5 ? 'aprobada' : 'suspensa';
+    }
+    return r;
+  }
+
+  function verCalificaciones(nombre) {
+    return verAsignaturas(nombre)
+      .map((a) => ({ asignatura: a.nombre, ...calcularNota(a.id) }))
+      .filter((x) => x.partes.length || nombre);
+  }
+
+  // ---------- faltas de laboratorio ----------
+
+  async function registrarFalta({ asignatura, fecha, clase_id, nota }) {
+    const asig = buscarAsignatura(asignatura);
+    if (!asig) throw new Error(`No encuentro la asignatura "${asignatura}"`);
+    const f = validarFecha(fecha).slice(0, 10);
+    if (e().faltas.some((x) => x.asignaturaId === asig.id && x.fecha === f && (x.claseId ?? null) === (clase_id ?? null))) {
+      return { ok: true, repetida: true, ...resumenFaltas(asig.id) };
+    }
+    e().faltas.push({ id: almacen.nuevoId(), asignaturaId: asig.id, fecha: f, claseId: clase_id ?? null, nota: limpio(nota) });
+    await guardar();
+    return { ok: true, ...resumenFaltas(asig.id) };
+  }
+
+  async function quitarFalta(id) {
+    const antes = e().faltas.length;
+    e().faltas = e().faltas.filter((x) => x.id !== Number(id));
+    await guardar();
+    return { ok: e().faltas.length < antes };
+  }
+
+  function resumenFaltas(asignaturaId) {
+    const asig = e().asignaturas.find((a) => a.id === asignaturaId);
+    const lista = e().faltas.filter((f) => f.asignaturaId === asignaturaId).sort((x, y) => x.fecha.localeCompare(y.fecha));
+    const max = asig?.maxFaltasLab ?? null;
+    return { asignatura: asig?.nombre, faltas: lista.length, maximo: max, quedan: max === null ? null : max - lista.length, fechas: lista.map((f) => f.fecha), lista };
+  }
+
+  /** Asignaturas que están al límite de faltas de laboratorio (o lo han pasado). */
+  function alertasFaltas() {
+    return e().asignaturas
+      .filter((a) => a.maxFaltasLab !== null && a.maxFaltasLab !== undefined)
+      .map((a) => resumenFaltas(a.id))
+      .filter((r) => r.faltas > 0 && r.quedan <= 1);
+  }
+
+  // ---------- tareas ----------
+
+  const ORDEN_PRIORIDAD = { alta: 0, media: 1, baja: 2 };
+
+  async function crearTarea({ texto, fecha, prioridad, asignatura }) {
+    if (!texto?.trim()) throw new Error('La tarea está vacía');
+    const t = {
+      id: almacen.nuevoId(), texto: texto.trim(), fecha: fecha ? validarFecha(fecha).slice(0, 10) : null,
+      prioridad: PRIORIDADES.includes(prioridad) ? prioridad : 'media', asignaturaId: asignatura ? asignaturaOCrear(asignatura).id : null,
+      hecha: false, creada: ahora(), hechaEn: null,
+    };
+    e().tareas.push(t);
+    await guardar();
+    return { ok: true, id: t.id };
+  }
+
+  async function modificarTarea(a) {
+    const t = e().tareas.find((x) => x.id === Number(a.id));
+    if (!t) return { ok: false, error: `No existe la tarea ${a.id}` };
+    if (a.texto?.trim()) t.texto = a.texto.trim();
+    if (a.fecha !== undefined) t.fecha = a.fecha ? validarFecha(a.fecha).slice(0, 10) : null;
+    if (PRIORIDADES.includes(a.prioridad)) t.prioridad = a.prioridad;
+    if (a.asignatura !== undefined) t.asignaturaId = a.asignatura ? asignaturaOCrear(a.asignatura).id : null;
+    if (a.hecha !== undefined) {
+      t.hecha = Boolean(a.hecha);
+      t.hechaEn = t.hecha ? ahora() : null;
+    }
+    await guardar();
+    return { ok: true };
+  }
+
+  async function borrarTarea(id) {
+    const antes = e().tareas.length;
+    e().tareas = e().tareas.filter((x) => x.id !== Number(id));
+    await guardar();
+    return { ok: e().tareas.length < antes };
+  }
+
+  /** Tareas ordenadas: pendientes primero, por fecha (las sin fecha al final) y prioridad. */
+  function verTareas({ incluir_hechas = false } = {}) {
+    return e().tareas
+      .filter((t) => incluir_hechas || !t.hecha)
+      .map((t) => ({ ...t, asignatura: nombreAsig(t.asignaturaId) }))
+      .sort((x, y) => Number(x.hecha) - Number(y.hecha) || (x.fecha || '9999').localeCompare(y.fecha || '9999') || ORDEN_PRIORIDAD[x.prioridad] - ORDEN_PRIORIDAD[y.prioridad] || x.id - y.id);
+  }
+
+  // ---------- semanas cargadas y próxima clase ----------
+
+  /** Semanas (lunes-domingo) de las próximas `semanas` con 3 o más exámenes/entregas. */
+  function semanasCargadas(semanas = 5, umbral = 3) {
+    const d = aDate(hoy()).getDay();
+    let lunes = sumarDias(hoy(), d === 0 ? -6 : 1 - d);
+    const res = [];
+    for (let i = 0; i < semanas; i++, lunes = sumarDias(lunes, 7)) {
+      const domingo = sumarDias(lunes, 6);
+      const evs = eventosEntre(lunes, domingo).filter((x) => TIPOS_CON_AVISO.has(x.tipo) && x.inicio.slice(0, 10) >= hoy());
+      if (evs.length >= umbral) res.push({ desde: lunes, hasta: domingo, eventos: evs });
+    }
+    return res;
+  }
+
+  /** La clase en curso o la siguiente (buscando hasta 7 días). */
+  function proximaClase() {
+    const ya = ahora();
+    for (let i = 0; i <= 7; i++) {
+      const f = sumarDias(hoy(), i);
+      for (const c of clasesDelDia(f)) {
+        if (c.cancelada) continue;
+        if (`${f}T${c.fin}` <= ya) continue;
+        return { ...c, enCurso: `${f}T${c.inicio}` <= ya };
+      }
+    }
+    return null;
+  }
+
+  const colorDe = (asignaturaId) => e().asignaturas.find((a) => a.id === asignaturaId)?.color || null;
+  const colorPorNombre = (nombre) => (nombre ? buscarAsignatura(nombre)?.color || null : null);
+
   // ---------- resúmenes ----------
 
   function resumenDiario() {
@@ -560,6 +763,24 @@ export function crearDatos(almacen) {
       L.push(`- [nota ${n.id}] ${n.fijada ? '📌 ' : ''}${n.titulo}${n.asignatura ? ` (${n.asignatura})` : ''}: ${t.replace(/\n/g, ' / ')}${t.length < n.texto.length ? ' …(recortada)' : ''}`);
     }
 
+    L.push('\n## Calificaciones (calculadora de notas)');
+    const cals = verCalificaciones();
+    if (!cals.length) L.push('(ninguna)');
+    for (const c of cals) {
+      L.push(`- ${c.asignatura}: ${c.partes.map((p) => `[parte ${p.id}] ${p.nombre} ${p.peso ?? '?'}%${p.nota !== null ? ` nota ${p.nota}` : ' (pendiente)'}${p.minimo !== null ? ` mín. ${p.minimo}` : ''}`).join('; ')} → llevas ${c.llevas}/10, objetivo ${c.objetivo}${c.necesitas !== null ? `, necesita ${c.necesitas} de media en lo pendiente` : ''}${c.notaFinal !== null ? `, nota final ${c.notaFinal}` : ''} (${c.estado})${c.pesoTotal !== 100 ? ` ⚠ los pesos suman ${c.pesoTotal}%` : ''}`);
+    }
+    L.push('\n## Faltas de laboratorio');
+    const conFaltas = e().asignaturas.filter((a) => a.maxFaltasLab !== null && a.maxFaltasLab !== undefined || e().faltas.some((f) => f.asignaturaId === a.id));
+    if (!conFaltas.length) L.push('(ninguna registrada)');
+    for (const a of conFaltas) {
+      const r = resumenFaltas(a.id);
+      L.push(`- ${a.nombre}: ${r.faltas} faltas${r.maximo !== null ? ` de ${r.maximo} permitidas (quedan ${r.quedan})` : ' (máximo no indicado)'}${r.fechas.length ? `: ${r.fechas.join(', ')}` : ''}`);
+    }
+    L.push('\n## Tareas pendientes');
+    const tareas = verTareas();
+    if (!tareas.length) L.push('(ninguna)');
+    for (const t of tareas.slice(0, 60)) L.push(`- [tarea ${t.id}] ${t.prioridad} | ${t.fecha || 'sin fecha'} | ${t.asignatura || '-'} | ${t.texto}`);
+
     L.push('\n## Documentos e información que ha añadido');
     if (!e().conocimiento.length) L.push('(ninguno)');
     let presupuesto = maxDocumentos;
@@ -584,6 +805,10 @@ export function crearDatos(almacen) {
     anadirConocimiento, leerDocumento, buscarEnDocumentos, borrarConocimiento,
     crearClase, verHorario, modificarClase, borrarClase, cambiarClaseDia, borrarCambioClase, clasesDelDia,
     crearNota, modificarNota, borrarNota, buscarNotas,
+    guardarCalificacion, borrarCalificacion, calcularNota, verCalificaciones,
+    registrarFalta, quitarFalta, resumenFaltas, alertasFaltas,
+    crearTarea, modificarTarea, borrarTarea, verTareas,
+    semanasCargadas, proximaClase, colorDe, colorPorNombre,
     resumenDiario, contexto, bonito,
   };
 }

@@ -154,3 +154,20 @@ Tus datos están solo en el móvil. Si desinstalas la app o borras los datos de 
 - **Sin internet** puedes ver tu horario, agenda y notas, pero el chat y la lectura de documentos no funcionan.
 - **Archivos**: máximo 15 MB por archivo. Para Word, guárdalo antes como PDF.
 - **La IA se puede equivocar**: revisa siempre lo que guarda al leer fotos o PDF, sobre todo las fechas.
+
+---
+
+# Novedades: tareas, calificaciones, faltas de laboratorio, mes y colores
+
+- **✅ Tareas** (☰ Más → Tareas, y en 🏠 Hoy las de hoy y las urgentes): escribe la tarea arriba y pulsa Añadir. Tócala para ponerle **fecha límite, prioridad** (🔴 alta, 🟡 media, 🟢 baja) y asignatura. Márcala como hecha con el círculo. También por chat: *"tengo que imprimir la práctica para el jueves"*.
+- **🎯 Calificaciones** (☰ Más → Calificaciones, o dentro de cada asignatura): añade cada parte de la nota con lo que vale (%), tu nota y, si la hay, la nota mínima. La app te dice **lo que llevas, tu media y qué necesitas sacar** en lo que te queda. La nota objetivo (5 por defecto) se cambia en ✏️ Editar asignatura. Por chat: *"en el parcial de Física he sacado un 6,5"*.
+- **🚫 Faltas de laboratorio**: en 📅 Agenda → Asignaturas → ✏️ Editar, pon el **máximo de faltas de laboratorio**. Cuando faltes, ve a 🗓️ Horario, toca esa clase de laboratorio y pulsa **"Marcar que falté"**. Si solo te queda 1 falta, te avisa en 🏠 Hoy.
+- **🗓️ Vista de mes**: 📅 Agenda → Eventos → **Mes**. Los puntos son del color de cada asignatura; los días con examen o entrega salen resaltados. Toca un día para ver lo que tienes.
+- **⚠️ Semana cargada**: si una de las próximas semanas tiene 3 o más exámenes o entregas, te avisa en 🏠 Hoy.
+- **Próxima clase**: arriba en 🏠 Hoy ves tu próxima clase (o la que está en curso), con el aula y lo que tienes que llevar.
+- **🎨 Colores**: cada asignatura tiene su color (se elige en ✏️ Editar asignatura). Se usa en el Horario, la Agenda, las Notas y el Mes.
+
+## Compartir desde otras apps (Android)
+Desde Chrome, Gmail, la galería o Archivos: toca **Compartir → Asistente Uni**. La app se abre en **Añadir información** con la web, la foto, el PDF o el texto ya puesto. Solo tienes que pulsar **Añadir al asistente**.
+
+> Si "Asistente Uni" no aparece en la lista de Compartir, Android aún no ha actualizado la app instalada (puede tardar hasta un día). Para tenerlo ya: mantén pulsado el icono de la app → **Desinstalar** y vuelve a instalarla desde Chrome (Parte 2). ⚠️ **Antes haz una copia de seguridad** (☰ Más → ⚙️ Ajustes → ⬇️ Hacer copia), porque al desinstalar se pueden borrar los datos. Luego restáurala con ⬆️ Restaurar copia.

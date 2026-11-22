@@ -389,3 +389,126 @@ test('429 en todos los modelos → mensaje con el detalle exacto de Google', asy
   assert.ok(llamadas < 15, 'no se queda reintentando sin fin');
   olvidarRespaldo();
 });
+
+// ---------- calculadora de notas ----------
+
+test('calificaciones: lo que llevas, media y lo que necesitas', async () => {
+  const { datos } = nuevo();
+  await datos.guardarCalificacion({ asignatura: 'Física II', nombre: 'Parcial', peso: 30, nota: 6 });
+  await datos.guardarCalificacion({ asignatura: 'Física II', nombre: 'Laboratorio', peso: 20, nota: '8,5' });
+  await datos.guardarCalificacion({ asignatura: 'Física II', nombre: 'Examen final', peso: 50, nota_minima: 4 });
+  const id = datos.buscarAsignatura('Física II').id;
+  let r = datos.calcularNota(id);
+  assert.equal(r.llevas, 3.5); // 1.8 + 1.7
+  assert.equal(r.media, 7); // 3.5 / 0.5
+  assert.equal(r.necesitas, 4); // (5-3.5)/0.5 = 3 → pero el mínimo es 4
+  assert.equal(r.estado, 'en curso');
+  await datos.guardarAsignatura({ nombre: 'Física II', nota_objetivo: 9 });
+  r = datos.calcularNota(id);
+  assert.equal(r.necesitas, 11);
+  assert.equal(r.estado, 'imposible');
+  await datos.guardarCalificacion({ asignatura: 'Física II', nombre: 'examen final', nota: 3.5 }); // mismo nombre → la actualiza
+  r = datos.calcularNota(id);
+  assert.equal(r.partes.length, 3);
+  assert.equal(r.notaFinal, 5.25);
+  assert.equal(r.estado, 'suspensa por mínimo');
+  assert.deepEqual(r.suspensas, ['Examen final']);
+  await assert.rejects(datos.guardarCalificacion({ asignatura: 'Física II', nombre: 'X', nota: 11 }), /entre 0 y 10/);
+});
+
+test('calificaciones: aprobado asegurado y pesos que no suman 100', async () => {
+  const { datos } = nuevo();
+  await datos.guardarCalificacion({ asignatura: 'Cálculo', nombre: 'P1', peso: 60, nota: 9 });
+  await datos.guardarCalificacion({ asignatura: 'Cálculo', nombre: 'P2', peso: 30 });
+  const r = datos.calcularNota(datos.buscarAsignatura('Cálculo').id);
+  assert.equal(r.estado, 'asegurado');
+  assert.equal(r.pesoTotal, 90);
+});
+
+// ---------- faltas de laboratorio ----------
+
+test('faltas de laboratorio: contar, máximo, no duplicar y alertas', async () => {
+  const { datos } = nuevo();
+  await datos.guardarAsignatura({ nombre: 'Química', max_faltas_laboratorio: 2 });
+  const id = datos.buscarAsignatura('Química').id;
+  await datos.registrarFalta({ asignatura: 'Química', fecha: '2026-11-10', clase_id: 5 });
+  assert.equal((await datos.registrarFalta({ asignatura: 'Química', fecha: '2026-11-10', clase_id: 5 })).repetida, true);
+  assert.equal(datos.resumenFaltas(id).quedan, 1);
+  assert.equal(datos.alertasFaltas().length, 1, 'avisa cuando solo queda 1');
+  await datos.registrarFalta({ asignatura: 'Química', fecha: '2026-11-17', clase_id: 5 });
+  assert.equal(datos.resumenFaltas(id).quedan, 0);
+  await datos.quitarFalta(datos.resumenFaltas(id).lista[0].id);
+  assert.equal(datos.resumenFaltas(id).faltas, 1);
+  await assert.rejects(datos.registrarFalta({ asignatura: 'Inexistente', fecha: '2026-11-10' }), /No encuentro/);
+});
+
+// ---------- tareas ----------
+
+test('tareas: orden por fecha y prioridad, marcar hecha', async () => {
+  const { datos } = nuevo();
+  await datos.crearTarea({ texto: 'Sin fecha baja', prioridad: 'baja' });
+  await datos.crearTarea({ texto: 'Mañana', fecha: sumarDias(hoy(), 1) });
+  const { id } = await datos.crearTarea({ texto: 'Hoy alta', fecha: hoy(), prioridad: 'alta', asignatura: 'Física' });
+  await datos.crearTarea({ texto: 'Hoy baja', fecha: hoy(), prioridad: 'baja' });
+  assert.deepEqual(datos.verTareas().map((t) => t.texto), ['Hoy alta', 'Hoy baja', 'Mañana', 'Sin fecha baja']);
+  await datos.modificarTarea({ id, hecha: true });
+  assert.equal(datos.verTareas().length, 3);
+  assert.equal(datos.verTareas({ incluir_hechas: true }).at(-1).texto, 'Hoy alta');
+  await assert.rejects(datos.crearTarea({ texto: ' ' }), /vacía/);
+});
+
+// ---------- semanas cargadas, próxima clase y colores ----------
+
+test('semana cargada: 3 o más exámenes/entregas en la misma semana', async () => {
+  const { datos } = nuevo();
+  const lunes = sumarDias(hoy(), 7 - ((new Date().getDay() + 6) % 7)); // lunes que viene
+  for (const [i, t] of [[0, 'examen'], [2, 'entrega'], [4, 'examen_laboratorio']]) await datos.crearEvento({ asignatura: 'X', tipo: t, titulo: `E${i}`, inicio: sumarDias(lunes, i) });
+  await datos.crearEvento({ asignatura: 'X', tipo: 'practica', titulo: 'no cuenta', inicio: sumarDias(lunes, 1) });
+  const s = datos.semanasCargadas();
+  assert.equal(s.length, 1);
+  assert.equal(s[0].desde, lunes);
+  assert.equal(s[0].eventos.length, 3);
+});
+
+test('próxima clase: la siguiente que no ha terminado ni está cancelada', async () => {
+  const { datos } = nuevo();
+  const manana = sumarDias(hoy(), 1);
+  const dia = ((new Date(`${manana}T12:00`).getDay() + 6) % 7) + 1;
+  const { ids } = await datos.crearClase({ asignatura: 'Física', dias: [dia], inicio: '08:00', fin: '09:00', aula: 'A1' });
+  await datos.crearClase({ asignatura: 'Química', dias: [dia], inicio: '10:00', fin: '11:00', aula: 'L1', tipo: 'laboratorio' });
+  const p = datos.proximaClase();
+  assert.equal(p.asignatura, 'Física');
+  assert.equal(p.fecha, manana);
+  await datos.cambiarClaseDia({ clase_id: ids[0], fecha: manana, cancelada: true });
+  assert.equal(datos.proximaClase().asignatura, 'Química');
+});
+
+test('colores: cada asignatura nueva recibe uno distinto y se puede cambiar', async () => {
+  const { datos, almacen } = nuevo();
+  const { COLORES } = await import('../js/datos.js');
+  await datos.guardarAsignatura({ nombre: 'A' });
+  await datos.guardarAsignatura({ nombre: 'B' });
+  const [a, b] = almacen.estado.asignaturas;
+  assert.ok(a.color && b.color && a.color !== b.color);
+  await datos.guardarAsignatura({ nombre: 'A', color: COLORES[5] });
+  assert.equal(datos.colorPorNombre('a'), COLORES[5]);
+  // copias antiguas sin color reciben uno al abrir
+  const viejo = crearAlmacen({ asignaturas: [{ id: 1, nombre: 'Vieja' }] });
+  crearDatos(viejo);
+  assert.ok(viejo.estado.asignaturas[0].color);
+});
+
+test('la IA puede usar calificaciones, faltas y tareas', async () => {
+  const { datos } = nuevo();
+  await ejecutar(datos, 'guardar_asignatura', { nombre: 'Física', max_faltas_laboratorio: 3 });
+  assert.equal((await ejecutar(datos, 'guardar_calificacion', { asignatura: 'Física', nombre: 'Final', peso: 100 })).ok, true);
+  const cal = await ejecutar(datos, 'ver_calificaciones', { asignatura: 'Física' });
+  assert.equal(cal[0].necesitas, 5);
+  const f = await ejecutar(datos, 'registrar_falta_laboratorio', { asignatura: 'Física', fecha: '2026-11-20' });
+  assert.equal(f.quedan, 2);
+  assert.equal((await ejecutar(datos, 'ver_faltas_laboratorio', { asignatura: 'Física' })).faltas, 1);
+  const t = await ejecutar(datos, 'crear_tarea', { texto: 'Imprimir práctica', prioridad: 'alta' });
+  await ejecutar(datos, 'modificar_tarea', { id: t.id, hecha: true });
+  assert.equal((await ejecutar(datos, 'ver_tareas', {})).length, 0);
+  assert.match(datos.contexto(), /Física: 1 faltas de 3 permitidas/);
+});

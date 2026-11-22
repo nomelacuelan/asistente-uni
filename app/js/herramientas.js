@@ -1,5 +1,5 @@
 // Acciones que la IA puede hacer sobre tus datos.
-import { TIPOS_EVENTO, TIPOS_CLASE } from './datos.js';
+import { TIPOS_EVENTO, TIPOS_CLASE, PRIORIDADES } from './datos.js';
 
 const fecha = (desc) => ({ type: 'string', description: `${desc}. Formato YYYY-MM-DD (todo el día) o YYYY-MM-DDTHH:MM (hora local).` });
 const hora = (desc) => ({ type: 'string', description: `${desc}. Formato HH:MM (24h).` });
@@ -21,6 +21,8 @@ export const declaraciones = [
         tiene_examen_final_laboratorio: { type: 'boolean' },
         info: { type: 'string', description: 'Otra información: ponderación de la nota, aula, tutorías, requisitos para aprobar...' },
         anadir_info: { type: 'boolean', description: 'true para añadir "info" a la que ya había en vez de sustituirla.' },
+        max_faltas_laboratorio: { type: 'integer', description: 'Número máximo de faltas permitidas a las clases de laboratorio.' },
+        nota_objetivo: { type: 'number', description: 'Nota que quiere sacar (por defecto 5).' },
       },
       required: ['nombre'],
     },
@@ -213,6 +215,68 @@ declaraciones.push(
     },
   },
   { name: 'borrar_nota', description: 'Borra una nota por id. Pide confirmación antes.', parametersJsonSchema: soloId },
+  {
+    name: 'guardar_calificacion',
+    description:
+      'Calculadora de notas: crea o actualiza una parte de la evaluación de una asignatura (p. ej. "Examen final" 60%, "Prácticas" 30%) y/o la nota sacada (0-10). Si ya existe una parte con ese nombre, la actualiza.',
+    parametersJsonSchema: {
+      type: 'object',
+      properties: {
+        asignatura: { type: 'string' },
+        nombre: { type: 'string', description: 'Nombre de la parte: "Parcial 1", "Laboratorio", "Examen final"...' },
+        peso: { type: 'number', description: 'Porcentaje de la nota final (0-100).' },
+        nota: { type: 'number', description: 'Nota obtenida sobre 10. Omitir si aún no la tiene.' },
+        nota_minima: { type: 'number', description: 'Nota mínima exigida en esa parte para poder aprobar (opcional).' },
+        id: { type: 'integer', description: 'Id de la parte, si se conoce.' },
+      },
+      required: ['asignatura'],
+    },
+  },
+  {
+    name: 'ver_calificaciones',
+    description: 'Calcula para cada asignatura: lo que lleva, su media, y qué nota necesita en lo que le falta para aprobar o llegar a su objetivo.',
+    parametersJsonSchema: { type: 'object', properties: { asignatura: { type: 'string' } } },
+  },
+  { name: 'borrar_calificacion', description: 'Borra una parte de la evaluación por id.', parametersJsonSchema: soloId },
+  {
+    name: 'registrar_falta_laboratorio',
+    description: 'Apunta una falta a una clase de LABORATORIO de una asignatura en una fecha.',
+    parametersJsonSchema: {
+      type: 'object',
+      properties: { asignatura: { type: 'string' }, fecha: fecha('Día de la falta'), nota: { type: 'string', description: 'Motivo (opcional).' } },
+      required: ['asignatura', 'fecha'],
+    },
+  },
+  {
+    name: 'ver_faltas_laboratorio',
+    description: 'Faltas de laboratorio de una asignatura: cuántas lleva, el máximo y cuántas le quedan.',
+    parametersJsonSchema: { type: 'object', properties: { asignatura: { type: 'string' } }, required: ['asignatura'] },
+  },
+  { name: 'quitar_falta', description: 'Borra una falta de laboratorio por id.', parametersJsonSchema: soloId },
+  {
+    name: 'crear_tarea',
+    description: 'Añade una tarea a la lista de tareas (cosas por hacer: imprimir, pedir revisión, comprar material...).',
+    parametersJsonSchema: {
+      type: 'object',
+      properties: { texto: { type: 'string' }, fecha: fecha('Fecha límite (opcional)'), prioridad: { type: 'string', enum: PRIORIDADES }, asignatura: { type: 'string' } },
+      required: ['texto'],
+    },
+  },
+  {
+    name: 'ver_tareas',
+    description: 'Lista las tareas pendientes ordenadas por fecha y prioridad.',
+    parametersJsonSchema: { type: 'object', properties: { incluir_hechas: { type: 'boolean' } } },
+  },
+  {
+    name: 'modificar_tarea',
+    description: 'Cambia una tarea o la marca como hecha (hecha=true).',
+    parametersJsonSchema: {
+      type: 'object',
+      properties: { id: { type: 'integer' }, texto: { type: 'string' }, fecha: fecha('Fecha límite'), prioridad: { type: 'string', enum: PRIORIDADES }, asignatura: { type: 'string' }, hecha: { type: 'boolean' } },
+      required: ['id'],
+    },
+  },
+  { name: 'borrar_tarea', description: 'Borra una tarea por id.', parametersJsonSchema: soloId },
 );
 
 export async function ejecutar(datos, nombre, a = {}) {
@@ -246,6 +310,25 @@ export async function ejecutar(datos, nombre, a = {}) {
       case 'buscar_notas': return datos.buscarNotas(a);
       case 'modificar_nota': return await datos.modificarNota(a);
       case 'borrar_nota': return await datos.borrarNota(a.id);
+      case 'guardar_calificacion': return await datos.guardarCalificacion(a);
+      case 'ver_calificaciones': return datos.verCalificaciones(a.asignatura).map(({ partes, ...r }) => ({ ...r, partes: partes.map(({ asignaturaId, ...p }) => p) }));
+      case 'borrar_calificacion': return await datos.borrarCalificacion(a.id);
+      case 'registrar_falta_laboratorio': {
+        const r = await datos.registrarFalta(a);
+        delete r.lista;
+        return r;
+      }
+      case 'ver_faltas_laboratorio': {
+        const asig = datos.buscarAsignatura(a.asignatura);
+        if (!asig) return { ok: false, error: `No encuentro la asignatura "${a.asignatura}"` };
+        const { lista, ...r } = datos.resumenFaltas(asig.id);
+        return { ...r, ids: lista.map((f) => ({ id: f.id, fecha: f.fecha })) };
+      }
+      case 'quitar_falta': return await datos.quitarFalta(a.id);
+      case 'crear_tarea': return await datos.crearTarea(a);
+      case 'ver_tareas': return datos.verTareas(a);
+      case 'modificar_tarea': return await datos.modificarTarea(a);
+      case 'borrar_tarea': return await datos.borrarTarea(a.id);
       default: return { ok: false, error: `Herramienta desconocida: ${nombre}` };
     }
   } catch (err) {

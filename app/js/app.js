@@ -1,6 +1,6 @@
 // Pantallas de la app.
 import { abrirAlmacenNavegador } from './almacen.js';
-import { crearDatos, TIPOS_EVENTO, NOMBRE_TIPO, ICONO_TIPO, TIPOS_CON_AVISO, TIPOS_CLASE, NOMBRE_CLASE, ICONO_CLASE, DIAS_SEMANA } from './datos.js';
+import { crearDatos, TIPOS_EVENTO, NOMBRE_TIPO, ICONO_TIPO, TIPOS_CON_AVISO, TIPOS_CLASE, NOMBRE_CLASE, ICONO_CLASE, DIAS_SEMANA, COLORES, PRIORIDADES } from './datos.js';
 import { conversar, extraerContenido, organizarInformacion, probarClave, ErrorIA } from './ia.js';
 import { crearICS, enlaceGoogle, enlaceGoogleRecordatorio } from './calendario.js';
 import { ahora, hoy, bonito, diasHasta, tieneHora, sumarDias, aDate } from './fechas.js';
@@ -187,9 +187,9 @@ function hojaCalendario({ eventos = [], recordatorios = [], titulo }) {
 
 // ---------- navegación ----------
 
-const VISTAS = { hoy: vistaHoy, horario: vistaHorario, chat: vistaChat, agenda: vistaAgenda, mas: vistaMas, notas: vistaNotas, anadir: vistaAnadir, ajustes: vistaAjustes };
-const TITULOS = { hoy: 'Hoy', horario: 'Horario', chat: 'Chat', agenda: 'Agenda', mas: 'Más', notas: 'Notas', anadir: 'Añadir información', ajustes: 'Ajustes' };
-const PESTANA_DE = { notas: 'mas', anadir: 'mas', ajustes: 'mas' }; // subpáginas de la pestaña Más
+const VISTAS = { hoy: vistaHoy, horario: vistaHorario, chat: vistaChat, agenda: vistaAgenda, mas: vistaMas, notas: vistaNotas, tareas: vistaTareas, calificaciones: vistaCalificaciones, anadir: vistaAnadir, ajustes: vistaAjustes };
+const TITULOS = { hoy: 'Hoy', horario: 'Horario', chat: 'Chat', agenda: 'Agenda', mas: 'Más', notas: 'Notas', tareas: 'Tareas', calificaciones: 'Calificaciones', anadir: 'Añadir información', ajustes: 'Ajustes' };
+const PESTANA_DE = { notas: 'mas', tareas: 'mas', calificaciones: 'mas', anadir: 'mas', ajustes: 'mas' }; // subpáginas de la pestaña Más
 let vistaActual = 'hoy';
 
 function render() {
@@ -221,7 +221,9 @@ function actualizarGlobo() {
 
 function lineaEvento(ev, conDias = false) {
   const hora = tieneHora(ev.inicio) ? `${ev.inicio.slice(11)} · ` : '';
+  const color = datos.colorDe(ev.asignaturaId);
   return `<li class="elemento tocable" data-evento="${ev.id}">
+    <span class="marca" style="background:${color || 'var(--linea)'}"></span>
     <span class="icono-ev">${ICONO_TIPO[ev.tipo] || '📌'}</span>
     <div class="cuerpo">
       <div class="titulo-el">${esc(ev.asignatura ? `${ev.asignatura}: ` : '')}${esc(ev.titulo)}</div>
@@ -292,11 +294,31 @@ function vistaHoy() {
     }
   }
   const proximoExamen = datos.buscarEventos({ desde: hoy() }).find((x) => x.tipo === 'examen' || x.tipo === 'examen_laboratorio');
+  const prox = datos.proximaClase();
+  let lineaProxima = '';
+  if (prox) {
+    const minutos = Math.round((aDate(`${prox.fecha}T${prox.inicio}`) - aDate(ahora())) / 60000);
+    const cuando = prox.enCurso
+      ? `ahora, hasta las ${prox.fin}`
+      : prox.fecha === hoy()
+        ? minutos < 60 ? `en ${minutos} min` : `a las ${prox.inicio}`
+        : `${prox.fecha === sumarDias(hoy(), 1) ? 'mañana' : fechaCorta(prox.fecha).split(',')[0]} a las ${prox.inicio}`;
+    const recuerda = [prox.nota, prox.notasClase].filter(Boolean).join(' · ');
+    lineaProxima = `<div class="proxima-clase">
+      <div class="suave pequeno">${prox.enCurso ? 'Clase en curso' : 'Próxima clase'}</div>
+      <div><b>${esc(prox.asignatura)}</b> · ${esc(cuando)}</div>
+      <div class="suave">${prox.aula ? `🚪 ${esc(prox.aula)}` : 'Sin aula'} · ${ICONO_CLASE[prox.tipo]} ${NOMBRE_CLASE[prox.tipo]}${recuerda ? ` · 📝 ${esc(recuerda)}` : ''}</div>
+    </div>`;
+  }
+  const cargadas = datos.semanasCargadas();
+  const tareasHoy = datos.verTareas().filter((t) => (t.fecha && t.fecha <= sumarDias(hoy(), 1)) || (!t.fecha && t.prioridad === 'alta')).slice(0, 6);
+  const alertasFaltas = datos.alertasFaltas();
 
   contenido.innerHTML = `
     <p class="suave" style="margin:0">${saludo} · ${esc(bonito(hoy()))}</p>
 
     <div class="tarjeta verde">
+      ${lineaProxima}
       ${proximoExamen ? `<div class="suave pequeno">Próximo examen</div>
         <div class="numero-grande">${diasHasta(proximoExamen.inicio) === 0 ? '¡Hoy!' : diasHasta(proximoExamen.inicio) === 1 ? 'Mañana' : `${diasHasta(proximoExamen.inicio)} días`}</div>
         <div class="suave">${esc(proximoExamen.asignatura || '')} · ${esc(proximoExamen.titulo)} · ${esc(fechaCorta(proximoExamen.inicio))}</div>`
@@ -307,7 +329,7 @@ function vistaHoy() {
 
     <div class="accesos">
       <a href="#horario"><span class="circulo">🗓️</span>Horario</a>
-      <a href="#notas"><span class="circulo">📝</span>Notas</a>
+      <a href="#tareas"><span class="circulo">✅</span>Tareas</a>
       <a href="#anadir"><span class="circulo">➕</span>Añadir</a>
       <a href="#chat"><span class="circulo">💬</span>Chat</a>
     </div>
@@ -317,6 +339,14 @@ function vistaHoy() {
     ${sinDatos ? `<div class="tarjeta destacada"><h2>👋 Empieza aquí</h2>
       <p>Dale a la app la información de tus asignaturas: escríbela, pega la web de la uni o sube el PDF del calendario de exámenes.</p>
       <div class="fila-botones"><a class="boton" href="#anadir">➕ Añadir información</a><a class="boton secundario" href="#chat">💬 Contárselo al chat</a></div></div>` : ''}
+
+    ${alertasFaltas.map((f) => `<div class="tarjeta alerta"><h2>🚫 Faltas de laboratorio · ${esc(f.asignatura)}</h2><p style="margin:0">Llevas ${f.faltas} de ${f.maximo}. ${f.quedan < 0 ? '⚠️ Has pasado el máximo.' : f.quedan === 0 ? '⚠️ No puedes faltar más.' : 'Solo te queda 1.'}</p></div>`).join('')}
+
+    ${cargadas.map((w) => `<div class="tarjeta alerta"><h2>⚠️ Semana cargada: ${esc(fechaCorta(w.desde).replace(/,.*/, ''))} – ${esc(fechaCorta(w.hasta).replace(/,.*/, ''))}</h2>
+      <p style="margin:0 0 6px">${w.eventos.length} exámenes y entregas${diasHasta(w.desde) > 0 ? ` · empieza ${cuandoRelativo(w.desde)}` : ' · es esta semana'}. ¡Organízate con tiempo!</p>
+      <ul class="lista">${w.eventos.map((x) => lineaEvento({ ...x, dias: diasHasta(x.inicio) }, true)).join('')}</ul></div>`).join('')}
+
+    ${tareasHoy.length ? `<div class="tarjeta"><h2>✅ Tareas para hoy y urgentes</h2><ul class="lista">${tareasHoy.map(filaTarea).join('')}</ul><a href="#tareas" class="pequeno">Ver todas las tareas →</a></div>` : ''}
 
     ${vencidos.length ? `<div class="tarjeta alerta"><h2>🔔 Avisos</h2><ul class="lista">${vencidos.map((x) => lineaRecordatorio(x)).join('')}</ul></div>` : ''}
 
@@ -332,6 +362,7 @@ function vistaHoy() {
   `;
   enlazarListas(contenido);
   enlazarClases(contenido);
+  enlazarTareas(contenido);
 }
 
 // =====================================================================
@@ -528,7 +559,19 @@ function vistaAgenda() {
   ({ eventos: seccionEventos, asignaturas: seccionAsignaturas, recordatorios: seccionRecordatorios, memoria: seccionMemoria })[seccionAgenda]($('#seccion'));
 }
 
+let modoEventos = 'lista';
+
 function seccionEventos(cont) {
+  const conmutador = `<div class="segmentos" style="margin-top:0"><button data-modo-ev="lista" class="${modoEventos === 'lista' ? 'activo' : ''}">☰ Lista</button><button data-modo-ev="mes" class="${modoEventos === 'mes' ? 'activo' : ''}">🗓️ Mes</button></div>`;
+  const enlazarConmutador = () => {
+    for (const b of $$('[data-modo-ev]', cont)) b.onclick = () => ((modoEventos = b.dataset.modoEv), seccionEventos(cont));
+  };
+  if (modoEventos === 'mes') {
+    cont.innerHTML = `${conmutador}<div id="mes"></div>`;
+    enlazarConmutador();
+    pintarMes($('#mes', cont));
+    return;
+  }
   const todos = datos.buscarEventos();
   const lista = todos.filter((ev) => (verPasados ? ev.inicio.slice(0, 10) < hoy() : ev.inicio.slice(0, 10) >= hoy()));
   if (verPasados) lista.reverse();
@@ -543,6 +586,7 @@ function seccionEventos(cont) {
     .join('');
   const futuros = todos.filter((ev) => ev.inicio.slice(0, 10) >= hoy());
   cont.innerHTML = `
+    ${conmutador}
     <div class="fila-botones">
       <button class="boton" id="nuevo-evento">＋ Nuevo evento</button>
       ${futuros.length ? `<button class="boton secundario" id="todo-cal">📅 Todo al calendario</button>` : ''}
@@ -551,6 +595,7 @@ function seccionEventos(cont) {
       ${lista.length ? `<ul class="lista">${items}</ul>` : `<p class="vacio">${verPasados ? 'No hay eventos pasados.' : 'No hay nada próximo.<br>Añade eventos aquí, desde el Chat o en ➕ Añadir.'}</p>`}
     </div>
     <button class="boton secundario ancho" id="pasados">${verPasados ? 'Ver próximos' : 'Ver pasados'}</button>`;
+  enlazarConmutador();
   $('#nuevo-evento').onclick = () => hojaFormEvento();
   $('#pasados').onclick = () => {
     verPasados = !verPasados;
@@ -600,8 +645,8 @@ function opcionesAsignaturas() {
   return `<datalist id="lista-asig">${E().asignaturas.map((a) => `<option value="${esc(a.nombre)}">`).join('')}</datalist>`;
 }
 
-function hojaFormEvento(ev = null) {
-  const fecha = ev ? ev.inicio.slice(0, 10) : hoy();
+function hojaFormEvento(ev = null, fechaInicial = null) {
+  const fecha = ev ? ev.inicio.slice(0, 10) : fechaInicial || hoy();
   const hora = ev && tieneHora(ev.inicio) ? ev.inicio.slice(11) : '';
   const horaFin = ev?.fin && tieneHora(ev.fin) ? ev.fin.slice(11) : '';
   abrirHoja(
@@ -648,13 +693,17 @@ function seccionAsignaturas(cont) {
     ${lista.length ? lista.map((a) => {
       const prox = a.eventos.filter((ev) => ev.inicio.slice(0, 10) >= hoy());
       const examen = prox.find((ev) => ev.tipo === 'examen');
-      return `<div class="tarjeta tocable" data-asig="${a.id}" style="cursor:pointer">
+      const nota = datos.calcularNota(a.id);
+      const faltas = datos.resumenFaltas(a.id);
+      return `<div class="tarjeta tocable" data-asig="${a.id}" style="cursor:pointer;border-left:6px solid ${a.color || 'var(--acento)'}">
         <h2>${esc(a.nombre)}</h2>
         <div class="detalle suave pequeno">${[a.profesor && `👤 ${esc(a.profesor)}`, a.curso && `${esc(a.curso)}º`, a.cuatrimestre && `${esc(a.cuatrimestre)} cuatri.`].filter(Boolean).join(' · ')}</div>
         <p style="margin:8px 0 0">
           <span class="chip ${a.examen_final_lab ? 'urgente' : ''}">🧪 Final de lab: ${a.examen_final_lab === null ? '¿?' : a.examen_final_lab ? 'sí' : 'no'}</span>
           ${examen ? `<span class="chip">📝 Examen ${fechaCorta(examen.inicio.slice(0, 10))}</span>` : ''}
           <span class="chip">${prox.length} próximos</span>
+          ${nota.partes.length ? `<span class="chip">🎯 Llevas ${nota.llevas.toLocaleString('es')}</span>` : ''}
+          ${faltas.maximo !== null || faltas.faltas ? `<span class="chip ${faltas.quedan !== null && faltas.quedan <= 1 ? 'urgente' : ''}">🚫 Faltas lab: ${faltas.faltas}${faltas.maximo !== null ? `/${faltas.maximo}` : ''}</span>` : ''}
         </p>
       </div>`;
     }).join('') : '<div class="tarjeta"><p class="vacio">Aún no hay asignaturas.</p></div>'}`;
@@ -673,6 +722,13 @@ function hojaAsignatura(id) {
        <p>🧪 Examen final de laboratorio: <b>${a.examen_final_lab === null ? 'no se sabe' : a.examen_final_lab ? 'sí' : 'no'}</b></p>
        ${a.info ? `<p>ℹ️ ${esc(a.info).replace(/\n/g, '<br>')}</p>` : ''}
      </div>
+     ${tarjetaNota(a.id)}
+     <div class="tarjeta">
+       <h2>🚫 Faltas de laboratorio</h2>
+       <p>${esc(textoFaltas(a.id))}</p>
+       ${datos.resumenFaltas(a.id).lista.length ? `<ul class="lista">${datos.resumenFaltas(a.id).lista.map((f) => `<li class="elemento"><div class="cuerpo">${esc(bonito(f.fecha))}${f.nota ? ` · ${esc(f.nota)}` : ''}</div><button class="boton-icono" data-quitar-falta="${f.id}" aria-label="Quitar falta">✕</button></li>`).join('')}</ul>` : ''}
+       <p class="suave pequeno">Márcalas tocando la clase de laboratorio en 🗓️ Horario. El máximo se cambia en ✏️ Editar.</p>
+     </div>
      <div class="tarjeta"><h2>Fechas</h2>${a.eventos.length ? `<ul class="lista">${a.eventos.map((ev) => lineaEvento({ ...ev, asignatura: null, dias: diasHasta(ev.inicio) }, true)).join('')}</ul>` : '<p class="suave">Sin fechas todavía.</p>'}</div>
      <div class="fila-botones">
        <button class="boton secundario" id="as-editar" style="flex:1">✏️ Editar</button>
@@ -680,6 +736,13 @@ function hojaAsignatura(id) {
      </div>`,
     (h) => {
       enlazarListas(h);
+      enlazarNota(h, a.id, () => hojaAsignatura(id));
+      for (const b of $$('[data-quitar-falta]', h)) {
+        b.onclick = async () => {
+          await datos.quitarFalta(b.dataset.quitarFalta);
+          hojaAsignatura(id);
+        };
+      }
       $('#as-editar', h).onclick = () => hojaFormAsignatura(a);
       $('#as-borrar', h).onclick = async () => {
         if (!confirmar(`¿Borrar "${a.nombre}" y sus ${a.eventos.length} fechas? No se puede deshacer.`)) return;
@@ -705,6 +768,13 @@ function hojaFormAsignatura(a = null) {
        </div>
        <label class="campo"><span>¿Tiene examen final de laboratorio?</span>
          <select name="lab"><option value="" ${lab == null ? 'selected' : ''}>No lo sé</option><option value="si" ${lab === true ? 'selected' : ''}>Sí</option><option value="no" ${lab === false ? 'selected' : ''}>No</option></select></label>
+       <div class="dos-columnas">
+         <label class="campo"><span>Máx. faltas de laboratorio</span><input name="maxFaltasLab" type="number" min="0" inputmode="numeric" value="${a?.maxFaltasLab ?? ''}" placeholder="Ej: 2"></label>
+         <label class="campo"><span>Nota que quiero sacar</span><input name="objetivo" type="number" min="1" max="10" step="0.1" inputmode="decimal" value="${a?.objetivo ?? 5}"></label>
+       </div>
+       <div class="campo"><span>Color</span>
+         <div class="colores">${COLORES.map((c) => `<label><input type="radio" name="color" value="${c}" ${(a?.color || colorSugerido()) === c ? 'checked' : ''}><span style="background:${c}"></span></label>`).join('')}</div>
+       </div>
        <label class="campo"><span>Más información</span><textarea name="info" placeholder="Cómo se evalúa, % de cada parte, tutorías, requisitos…">${esc(a?.info || '')}</textarea></label>
        <button class="boton ancho">Guardar</button>
      </form>`,
@@ -719,6 +789,9 @@ function hojaFormAsignatura(a = null) {
           await datos.guardarAsignatura({
             nombre: f.nombre, profesor: f.profesor, curso: f.curso, cuatrimestre: f.cuatrimestre, info: f.info,
             tiene_examen_final_laboratorio: f.lab === '' ? null : f.lab === 'si',
+            max_faltas_laboratorio: f.maxFaltasLab === '' ? null : f.maxFaltasLab,
+            nota_objetivo: f.objetivo || 5,
+            color: f.color,
           });
           cerrarHoja();
           aviso('✓ Guardado');
@@ -803,6 +876,7 @@ function seccionMemoria(cont) {
 let modoAnadir = 'texto';
 let archivoAnadir = null;
 let cargandoAnadir = false;
+let compartidoAnadir = null; // lo que llega desde "Compartir" de otra app
 let procesando = false;
 
 const ICONO_DOC = { texto: '✍️', url: '🔗', archivo: '📄', imagen: '🖼️' };
@@ -814,11 +888,11 @@ function vistaAnadir() {
   let formulario = '';
   if (modoAnadir === 'texto') {
     formulario = `
-      <label class="campo"><span>Título (opcional)</span><input name="titulo" placeholder="Ej: Normas del laboratorio de Química"></label>
-      <label class="campo"><span>Información</span><textarea name="texto" required style="min-height:180px" placeholder="Escribe o pega aquí lo que quieras: fechas de exámenes, cómo se evalúa cada asignatura, apuntes, normas…"></textarea></label>`;
+      <label class="campo"><span>Título (opcional)</span><input name="titulo" placeholder="Ej: Normas del laboratorio de Química" value="${esc(compartidoAnadir?.titulo || '')}"></label>
+      <label class="campo"><span>Información</span><textarea name="texto" required style="min-height:180px" placeholder="Escribe o pega aquí lo que quieras: fechas de exámenes, cómo se evalúa cada asignatura, apuntes, normas…">${esc(compartidoAnadir?.texto || '')}</textarea></label>`;
   } else if (modoAnadir === 'url') {
     formulario = `
-      <label class="campo"><span>Enlace de la web</span><input name="url" type="url" required inputmode="url" placeholder="https://www.tu-uni.es/calendario-examenes"></label>
+      <label class="campo"><span>Enlace de la web</span><input name="url" type="url" required inputmode="url" placeholder="https://www.tu-uni.es/calendario-examenes" value="${esc(compartidoAnadir?.url || '')}"></label>
       <p class="suave pequeno">La página tiene que ser pública (sin iniciar sesión). Si la web pide usuario y contraseña, copia el texto y usa ✍️ Escribir, o guárdala como PDF.</p>`;
   } else {
     const esImg = modoAnadir === 'imagen';
@@ -911,6 +985,7 @@ async function procesarAnadir(form) {
       ({ titulo, contenido: contenidoDoc } = await extraerContenido({ ajustes, archivo: archivoAnadir }));
     }
     const doc = await datos.anadirConocimiento({ titulo, tipo: modoAnadir, origen, contenido: contenidoDoc });
+    compartidoAnadir = null;
     archivoAnadir = null;
 
     let resumen = '';
@@ -993,10 +1068,11 @@ function filaClase(c, marcarAhora = false) {
     c.cancelada ? '<span class="chip cambio">Cancelada</span>' : '',
     c.extra ? '<span class="chip cambio">Solo este día</span>' : c.cambiada && !c.cancelada ? '<span class="chip cambio">Cambio este día</span>' : '',
     enCurso ? '<span class="chip">Ahora</span>' : '',
+    faltaDe(c) ? '<span class="chip cambio">🚫 Falta</span>' : '',
   ].join(' ');
   return `<div class="clase ${c.tipo} ${c.cancelada ? 'cancelada' : ''}" data-clase="${c.claseId ?? ''}" data-cambio="${c.cambioId ?? ''}" data-fecha="${c.fecha}">
     <div class="horas">${c.inicio}<small>${c.fin}</small></div>
-    <div class="barra"></div>
+    <div class="barra" style="background:${datos.colorPorNombre(c.asignatura) || 'var(--acento)'}"></div>
     <div class="cuerpo">
       <div class="titulo-el">${esc(c.asignatura || 'Clase')}</div>
       <div class="detalle">${c.aula ? `🚪 ${esc(c.aula)}` : 'Sin aula'}${c.grupo ? ` · grupo ${esc(c.grupo)}` : ''}${c.nota ? ` · ${esc(c.nota)}` : ''}</div>
@@ -1074,6 +1150,19 @@ function enlazarClases(raiz) {
   }
 }
 
+/** Falta de laboratorio apuntada para esta clase en ese día (si la hay). */
+function faltaDe(c) {
+  const asig = datos.buscarAsignatura(c.asignatura);
+  if (!asig) return null;
+  return E().faltas.find((f) => f.asignaturaId === asig.id && f.fecha === c.fecha && (f.claseId ?? null) === (c.claseId ?? c.cambioId ?? null)) || null;
+}
+
+function textoFaltas(asignaturaId) {
+  const r = datos.resumenFaltas(asignaturaId);
+  if (r.maximo === null) return `${r.faltas} ${r.faltas === 1 ? 'falta' : 'faltas'} de laboratorio (máximo sin indicar)`;
+  return `${r.faltas} de ${r.maximo} faltas de laboratorio${r.quedan < 0 ? ' — ⚠️ has pasado el máximo' : r.quedan === 0 ? ' — ⚠️ no te quedan más' : ` · te quedan ${r.quedan}`}`;
+}
+
 function hojaClase({ claseId, cambioId, fecha }) {
   const c = datos.clasesDelDia(fecha).find((x) => (claseId ? x.claseId === claseId : x.cambioId === cambioId));
   if (!c) return;
@@ -1087,6 +1176,10 @@ function hojaClase({ claseId, cambioId, fecha }) {
        ${c.nota ? `<p>📝 ${esc(c.nota)}</p>` : ''}
        ${base ? `<p class="suave pequeno">Normalmente: cada ${DIAS_SEMANA[base.dia - 1]} ${base.inicio}–${base.fin}, ${NOMBRE_CLASE[base.tipo].toLowerCase()}${base.aula ? `, aula ${esc(base.aula)}` : ''}${base.notas ? ` · ${esc(base.notas)}` : ''}</p>` : '<p class="suave pequeno">Clase extra solo este día.</p>'}
      </div>
+     ${c.tipo === 'laboratorio' && !c.cancelada ? `<div class="tarjeta">
+       <p style="margin:0 0 8px">🧪 ${esc(textoFaltas(datos.buscarAsignatura(c.asignatura)?.id))}</p>
+       <button class="boton ${faltaDe(c) ? 'secundario' : 'peligro'} ancho" id="cl-falta">${faltaDe(c) ? '↩️ Quitar la falta de este día' : '🚫 Marcar que falté a este laboratorio'}</button>
+     </div>` : ''}
      ${base ? `<button class="boton ancho" id="cl-dia">✏️ Cambiar solo este día</button>` : ''}
      ${c.cambiada ? `<button class="boton secundario ancho" id="cl-quitar" style="margin-top:8px">${c.extra ? '🗑️ Borrar esta clase extra' : '↩️ Quitar el cambio de este día'}</button>` : ''}
      ${base ? `<div class="fila-botones">
@@ -1094,6 +1187,16 @@ function hojaClase({ claseId, cambioId, fecha }) {
        <button class="boton peligro" id="cl-borrar" style="flex:1">🗑️ Quitar del horario</button>
      </div>` : ''}`,
     (h) => {
+      if ($('#cl-falta', h)) {
+        $('#cl-falta', h).onclick = async () => {
+          const f = faltaDe(c);
+          if (f) await datos.quitarFalta(f.id);
+          else await datos.registrarFalta({ asignatura: c.asignatura, fecha, clase_id: c.claseId ?? c.cambioId });
+          cerrarHoja();
+          aviso(f ? '↩️ Falta quitada' : `🚫 Falta apuntada · ${textoFaltas(datos.buscarAsignatura(c.asignatura).id)}`, 5000);
+          render();
+        };
+      }
       if (base) {
         $('#cl-dia', h).onclick = () => hojaCambioDia({ fecha, clase: c });
         $('#cl-editar', h).onclick = () => hojaFormClase(base);
@@ -1212,7 +1315,7 @@ function hojaTodasClases() {
     `<h2>Todas las clases</h2>
      <div class="tarjeta">${lista.map((c) => `<div class="clase ${c.tipo}" data-editar-clase="${c.id}">
         <div class="horas mayus" style="width:70px">${DIAS_SEMANA[c.dia - 1].slice(0, 3)}<small>${c.inicio}–${c.fin}</small></div>
-        <div class="barra"></div>
+        <div class="barra" style="background:${datos.colorPorNombre(c.asignatura) || 'var(--acento)'}"></div>
         <div class="cuerpo"><div class="titulo-el">${esc(c.asignatura)}</div><div class="detalle">${ICONO_CLASE[c.tipo]} ${NOMBRE_CLASE[c.tipo]}${c.aula ? ` · 🚪 ${esc(c.aula)}` : ''}${c.grupo ? ` · grupo ${esc(c.grupo)}` : ''}</div></div>
       </div>`).join('')}</div>`,
     (h) => {
@@ -1254,7 +1357,7 @@ function pintarNotas() {
     cont.innerHTML = `<div class="tarjeta"><p class="vacio">${E().notas.length ? 'No hay notas que coincidan.' : 'Aquí puedes apuntar lo que quieras: fórmulas, ideas, material que llevar, dudas para tutoría…<br><br>También puedes decírselo al Chat: <i>"apunta que…"</i>'}</p></div>`;
     return;
   }
-  cont.innerHTML = `<div class="notas">${lista.map((n) => `<div class="nota" data-nota="${n.id}">
+  cont.innerHTML = `<div class="notas">${lista.map((n) => `<div class="nota" data-nota="${n.id}" style="border-top-color:${datos.colorDe(n.asignaturaId) || 'var(--acento)'}">
       <h4>${n.fijada ? '📌 ' : ''}${esc(n.titulo)}</h4>
       ${n.texto && n.texto !== n.titulo ? `<p>${esc(n.texto)}</p>` : ''}
       <div class="pie">${n.asignatura ? `${esc(n.asignatura)} · ` : ''}${esc(fechaCorta(n.editado))}</div>
@@ -1308,14 +1411,330 @@ function hojaNota(n = null) {
 // =====================================================================
 
 function vistaMas() {
+  const pendientes = datos.verTareas().length;
   contenido.innerHTML = `
     <div class="mosaico">
+      <a href="#tareas"><span class="grande">✅</span><b>Tareas</b><span class="suave">${pendientes} pendientes</span></a>
       <a href="#notas"><span class="grande">📝</span><b>Notas</b><span class="suave">${E().notas.length} notas</span></a>
+      <a href="#calificaciones"><span class="grande">🎯</span><b>Calificaciones</b><span class="suave">Calcula qué necesitas para aprobar</span></a>
       <a href="#anadir"><span class="grande">➕</span><b>Añadir información</b><span class="suave">Texto, web, archivos e imágenes</span></a>
       <a href="#agenda" id="ir-asig"><span class="grande">🎓</span><b>Asignaturas</b><span class="suave">${E().asignaturas.length} asignaturas</span></a>
       <a href="#ajustes"><span class="grande">⚙️</span><b>Ajustes</b><span class="suave">IA, tema, avisos, copias</span></a>
     </div>`;
   $('#ir-asig').onclick = () => (seccionAgenda = 'asignaturas');
+}
+
+/** Primer color que no usa ninguna asignatura (para las nuevas). */
+const colorSugerido = () => COLORES.find((c) => !E().asignaturas.some((a) => a.color === c)) || COLORES[E().asignaturas.length % COLORES.length];
+
+// =====================================================================
+// TAREAS
+// =====================================================================
+
+let verTareasHechas = false;
+const ICONO_PRIORIDAD = { alta: '🔴', media: '🟡', baja: '🟢' };
+
+function filaTarea(t) {
+  const vencida = t.fecha && !t.hecha && t.fecha < hoy();
+  const color = datos.colorDe(t.asignaturaId);
+  return `<li class="elemento tarea ${t.hecha ? 'hecha' : ''}">
+    <button class="check" data-check="${t.id}" aria-label="${t.hecha ? 'Marcar como pendiente' : 'Marcar como hecha'}">${t.hecha ? '✓' : ''}</button>
+    <div class="cuerpo" data-tarea="${t.id}" style="cursor:pointer">
+      <div class="titulo-el">${esc(t.texto)}</div>
+      <div class="detalle">${ICONO_PRIORIDAD[t.prioridad]} ${t.prioridad}${t.fecha ? ` · <span class="${vencida ? 'vencida' : ''}">${vencida ? '⚠️ ' : ''}${esc(fechaCorta(t.fecha))} (${cuandoRelativo(t.fecha)})</span>` : ''}${t.asignatura ? ` · <span style="color:${color}">●</span> ${esc(t.asignatura)}` : ''}</div>
+    </div>
+  </li>`;
+}
+
+function enlazarTareas(raiz, alCambiar = render) {
+  for (const b of $$('[data-check]', raiz)) {
+    b.onclick = async () => {
+      const t = E().tareas.find((x) => x.id === Number(b.dataset.check));
+      await datos.modificarTarea({ id: t.id, hecha: !t.hecha });
+      if (!t.hecha) aviso('↩️ Pendiente otra vez');
+      alCambiar();
+    };
+  }
+  for (const el of $$('[data-tarea]', raiz)) el.onclick = () => hojaTarea(E().tareas.find((x) => x.id === Number(el.dataset.tarea)));
+}
+
+function vistaTareas() {
+  if (vistaActual !== 'tareas') return;
+  const lista = datos.verTareas({ incluir_hechas: verTareasHechas });
+  const pendientes = lista.filter((t) => !t.hecha);
+  const grupos = [
+    ['⚠️ Atrasadas', pendientes.filter((t) => t.fecha && t.fecha < hoy())],
+    ['📌 Hoy', pendientes.filter((t) => t.fecha === hoy())],
+    ['📅 Próximas', pendientes.filter((t) => t.fecha && t.fecha > hoy())],
+    ['🗂️ Sin fecha', pendientes.filter((t) => !t.fecha)],
+    ['✓ Hechas', lista.filter((t) => t.hecha)],
+  ].filter(([, l]) => l.length);
+  contenido.innerHTML = `
+    <form class="tarjeta" id="f-tarea-rapida" style="display:flex;gap:8px;align-items:center;padding:8px 10px">
+      <input name="texto" class="buscador" style="border:0;padding:8px" placeholder="＋ Añadir tarea rápida…" autocomplete="off" required>
+      <button class="boton" style="min-height:40px">Añadir</button>
+    </form>
+    ${grupos.length ? grupos.map(([titulo, l]) => `<div class="tarjeta"><h3 style="margin-top:0">${titulo} (${l.length})</h3><ul class="lista">${l.map(filaTarea).join('')}</ul></div>`).join('')
+      : '<div class="tarjeta"><p class="vacio">No tienes tareas pendientes 🎉<br>Añádelas aquí o dile al chat: <i>"tengo que imprimir la práctica para el jueves"</i></p></div>'}
+    <button class="boton secundario ancho" id="ver-hechas">${verTareasHechas ? 'Ocultar las hechas' : 'Ver también las hechas'}</button>
+    <p class="suave pequeno">💡 Toca una tarea para ponerle fecha, prioridad o asignatura.</p>`;
+  $('#f-tarea-rapida').onsubmit = async (e) => {
+    e.preventDefault();
+    await datos.crearTarea({ texto: new FormData(e.target).get('texto') });
+    vistaTareas();
+    $('#f-tarea-rapida input')?.focus();
+  };
+  $('#ver-hechas').onclick = () => ((verTareasHechas = !verTareasHechas), vistaTareas());
+  enlazarTareas(contenido);
+}
+
+function hojaTarea(t = null) {
+  const asig = t ? E().asignaturas.find((a) => a.id === t.asignaturaId)?.nombre || '' : '';
+  abrirHoja(
+    `<h2>${t ? 'Editar tarea' : 'Nueva tarea'}</h2>
+     <form id="f-tarea">
+       <label class="campo"><span>Tarea</span><input name="texto" required value="${esc(t?.texto || '')}" placeholder="Ej: Imprimir la práctica 3"></label>
+       <div class="dos-columnas">
+         <label class="campo"><span>Fecha límite (opcional)</span><input type="date" name="fecha" value="${t?.fecha || ''}"></label>
+         <label class="campo"><span>Prioridad</span><select name="prioridad">${PRIORIDADES.map((p) => `<option value="${p}" ${(t?.prioridad || 'media') === p ? 'selected' : ''}>${ICONO_PRIORIDAD[p]} ${p[0].toUpperCase() + p.slice(1)}</option>`).join('')}</select></label>
+       </div>
+       <label class="campo"><span>Asignatura (opcional)</span><input name="asignatura" list="lista-asig" value="${esc(asig)}" autocomplete="off">${opcionesAsignaturas()}</label>
+       <div class="fila-botones">
+         <button class="boton" style="flex:2">Guardar</button>
+         ${t ? '<button type="button" class="boton peligro" id="borrar-tarea" style="flex:1">🗑️</button>' : ''}
+       </div>
+     </form>`,
+    (h) => {
+      $('#f-tarea', h).onsubmit = async (e) => {
+        e.preventDefault();
+        const f = Object.fromEntries(new FormData(e.target));
+        try {
+          const campos = { texto: f.texto, fecha: f.fecha || null, prioridad: f.prioridad, asignatura: f.asignatura || null };
+          if (t) await datos.modificarTarea({ id: t.id, ...campos });
+          else await datos.crearTarea(campos);
+          cerrarHoja();
+          aviso('✓ Tarea guardada');
+          render();
+        } catch (err) {
+          aviso(err.message);
+        }
+      };
+      if ($('#borrar-tarea', h)) {
+        $('#borrar-tarea', h).onclick = async () => {
+          await datos.borrarTarea(t.id);
+          cerrarHoja();
+          render();
+        };
+      }
+    },
+  );
+}
+
+// =====================================================================
+// CALIFICACIONES (calculadora de notas)
+// =====================================================================
+
+const fmt = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('es', { maximumFractionDigits: 2 }));
+
+/** Tarjeta con el cálculo de la nota de una asignatura. */
+function tarjetaNota(asignaturaId) {
+  const r = datos.calcularNota(asignaturaId);
+  let resumen;
+  if (!r.partes.length) resumen = '<p class="suave">Añade cómo se evalúa (por ejemplo: Examen final 60%, Prácticas 30%, Laboratorio 10%) y las notas que vayas sacando.</p>';
+  else {
+    const mensajes = {
+      'en curso': `Necesitas sacar de media <b>${fmt(r.necesitas)}</b> en lo que te falta (${fmt(r.pesoPendiente)}%) para llegar a un <b>${fmt(r.objetivo)}</b>.`,
+      asegurado: `🎉 ¡Ya tienes el ${fmt(r.objetivo)} asegurado!${r.necesitas > 0 ? ` (solo te falta llegar a ${fmt(r.necesitas)} donde hay nota mínima)` : ''}`,
+      imposible: `😬 Con lo que queda (${fmt(r.pesoPendiente)}%) no llega para un ${fmt(r.objetivo)}: harían falta ${fmt(r.necesitas)} de media.${r.objetivo > 5 ? ' Baja el objetivo para ver qué necesitas para aprobar.' : ''}`,
+      'suspensa por mínimo': `⚠️ No llegas a la nota mínima en: ${esc(r.suspensas.join(', '))}.`,
+      conseguido: `🎉 Nota final: <b>${fmt(r.notaFinal)}</b>. ¡Objetivo conseguido!`,
+      aprobada: `✅ Nota final: <b>${fmt(r.notaFinal)}</b>. Aprobada.`,
+      suspensa: `Nota final: <b>${fmt(r.notaFinal)}</b>.`,
+      'sin datos': 'Pon el % que vale cada parte para poder calcular.',
+    };
+    resumen = `
+      <div class="cifras">
+        <div><span class="suave pequeno">Llevas</span><b>${fmt(r.llevas)}</b><span class="suave pequeno">de 10</span></div>
+        <div><span class="suave pequeno">Media</span><b>${fmt(r.media)}</b><span class="suave pequeno">en lo hecho</span></div>
+        <div><span class="suave pequeno">Necesitas</span><b>${r.necesitas === null ? '—' : fmt(r.necesitas)}</b><span class="suave pequeno">en lo pendiente</span></div>
+      </div>
+      <p>${mensajes[r.estado]}</p>
+      ${r.pesoTotal !== 100 ? `<p class="suave pequeno">⚠️ Los porcentajes suman ${fmt(r.pesoTotal)}%, no 100%.</p>` : ''}`;
+  }
+  return `<div class="tarjeta">
+    <h2>🎯 Calificaciones <span class="suave pequeno">(objetivo: ${fmt(r.objetivo)})</span></h2>
+    ${resumen}
+    ${r.partes.length ? `<ul class="lista">${r.partes.map((p) => `<li class="elemento tocable" data-parte="${p.id}">
+      <div class="cuerpo"><div class="titulo-el">${esc(p.nombre)}</div><div class="detalle">${p.peso !== null ? `${fmt(p.peso)}%` : 'sin %'}${p.minimo !== null ? ` · mínimo ${fmt(p.minimo)}` : ''}</div></div>
+      <span class="chip ${p.nota === null ? '' : p.minimo !== null && p.nota < p.minimo ? 'urgente' : ''}">${p.nota === null ? 'Pendiente' : fmt(p.nota)}</span>
+    </li>`).join('')}</ul>` : ''}
+    <button class="boton secundario ancho" data-nueva-parte="${asignaturaId}" style="margin-top:8px">＋ Añadir parte o nota</button>
+  </div>`;
+}
+
+function enlazarNota(raiz, asignaturaId, volver) {
+  for (const el of $$('[data-parte]', raiz)) el.onclick = () => hojaParte({ asignaturaId, parte: E().calificaciones.find((x) => x.id === Number(el.dataset.parte)), volver });
+  for (const b of $$('[data-nueva-parte]', raiz)) b.onclick = () => hojaParte({ asignaturaId: Number(b.dataset.nuevaParte), volver });
+}
+
+function hojaParte({ asignaturaId, parte = null, volver }) {
+  const asig = E().asignaturas.find((a) => a.id === asignaturaId);
+  abrirHoja(
+    `<h2>${parte ? 'Editar' : 'Añadir'} parte · ${esc(asig.nombre)}</h2>
+     <form id="f-parte">
+       <label class="campo"><span>Parte de la evaluación</span><input name="nombre" required value="${esc(parte?.nombre || '')}" placeholder="Ej: Examen final, Parcial 1, Prácticas" list="partes-tipicas">
+         <datalist id="partes-tipicas"><option value="Examen final"><option value="Parcial 1"><option value="Parcial 2"><option value="Prácticas"><option value="Laboratorio"><option value="Examen de laboratorio"><option value="Trabajo"><option value="Asistencia"></datalist></label>
+       <div class="dos-columnas">
+         <label class="campo"><span>Vale (%)</span><input name="peso" type="number" min="0" max="100" step="0.1" inputmode="decimal" value="${parte?.peso ?? ''}" placeholder="Ej: 60"></label>
+         <label class="campo"><span>Mi nota (sobre 10)</span><input name="nota" type="number" min="0" max="10" step="0.01" inputmode="decimal" value="${parte?.nota ?? ''}" placeholder="Pendiente"></label>
+       </div>
+       <label class="campo"><span>Nota mínima para aprobar (opcional)</span><input name="minimo" type="number" min="0" max="10" step="0.1" inputmode="decimal" value="${parte?.minimo ?? ''}" placeholder="Ej: 4"></label>
+       <div class="fila-botones">
+         <button class="boton" style="flex:2">Guardar</button>
+         ${parte ? '<button type="button" class="boton peligro" id="borrar-parte" style="flex:1">🗑️</button>' : ''}
+       </div>
+     </form>`,
+    (h) => {
+      $('#f-parte', h).onsubmit = async (e) => {
+        e.preventDefault();
+        const f = Object.fromEntries(new FormData(e.target));
+        try {
+          await datos.guardarCalificacion({ id: parte?.id, asignatura: asig.nombre, nombre: f.nombre, peso: f.peso, nota: f.nota, nota_minima: f.minimo });
+          aviso('✓ Guardado');
+          if (volver) volver();
+          else {
+            cerrarHoja();
+            render();
+          }
+        } catch (err) {
+          aviso(err.message);
+        }
+      };
+      if ($('#borrar-parte', h)) {
+        $('#borrar-parte', h).onclick = async () => {
+          await datos.borrarCalificacion(parte.id);
+          if (volver) volver();
+          else {
+            cerrarHoja();
+            render();
+          }
+        };
+      }
+    },
+  );
+}
+
+function vistaCalificaciones() {
+  if (vistaActual !== 'calificaciones') return;
+  const asigs = datos.verAsignaturas();
+  contenido.innerHTML = asigs.length
+    ? `<p class="suave" style="margin:0">Apunta cuánto vale cada parte de la nota y lo que vas sacando. La app calcula qué necesitas en lo que te queda.</p>
+       ${asigs.map((a) => `<div class="tarjeta" style="border-left:6px solid ${a.color || 'var(--acento)'};padding-bottom:4px"><h2 style="margin-bottom:0">${esc(a.nombre)}</h2></div>${tarjetaNota(a.id)}`).join('')}
+       <p class="suave pequeno">💡 También puedes decírselo al chat: <i>"en el parcial de Física he sacado un 6,5"</i> o <i>"el examen final de Cálculo vale un 70% y hay que sacar un 4"</i>.</p>`
+    : '<div class="tarjeta"><p class="vacio">Primero añade tus asignaturas (📅 Agenda → Asignaturas).</p></div>';
+  for (const a of asigs) enlazarNota(contenido, a.id, null);
+}
+
+// =====================================================================
+// VISTA DE MES (Agenda → Eventos)
+// =====================================================================
+
+let mesAgenda = null; // "YYYY-MM"
+let diaMesSeleccionado = null;
+
+function pintarMes(cont) {
+  mesAgenda ||= hoy().slice(0, 7);
+  const [a, m] = mesAgenda.split('-').map(Number);
+  const primero = `${mesAgenda}-01`;
+  const diasMes = new Date(a, m, 0).getDate();
+  const huecos = (aDate(primero).getDay() + 6) % 7; // lunes = 0
+  const eventos = datos.eventosEntre(primero, `${mesAgenda}-${String(diasMes).padStart(2, '0')}`);
+  const tareas = datos.verTareas().filter((t) => t.fecha?.startsWith(mesAgenda));
+  const nombreMes = bonito(primero).replace(/^\S+ 1 de /, '');
+  let celdas = '';
+  for (let i = 0; i < huecos; i++) celdas += '<div></div>';
+  for (let d = 1; d <= diasMes; d++) {
+    const f = `${mesAgenda}-${String(d).padStart(2, '0')}`;
+    const evs = eventos.filter((x) => x.inicio.startsWith(f));
+    const nT = tareas.filter((t) => t.fecha === f).length;
+    const importante = evs.some((x) => TIPOS_CON_AVISO.has(x.tipo));
+    celdas += `<button class="dia-mes ${f === hoy() ? 'hoy' : ''} ${f === diaMesSeleccionado ? 'activo' : ''} ${importante ? 'importante' : ''}" data-dia-mes="${f}">
+      <span>${d}</span>
+      <span class="puntos">${evs.slice(0, 4).map((x) => `<i style="background:${datos.colorDe(x.asignaturaId) || 'var(--suave)'}"></i>`).join('')}${nT ? '<i class="tarea-punto"></i>' : ''}</span>
+    </button>`;
+  }
+  const sel = diaMesSeleccionado?.startsWith(mesAgenda) ? diaMesSeleccionado : null;
+  const evSel = sel ? eventos.filter((x) => x.inicio.startsWith(sel)) : [];
+  const tSel = sel ? tareas.filter((t) => t.fecha === sel) : [];
+  cont.innerHTML = `
+    <div class="semana-nav">
+      <button class="boton-icono" id="mes-ant" aria-label="Mes anterior">‹</button>
+      <b class="mayus">${esc(nombreMes)}</b>
+      <button class="boton secundario" id="mes-hoy" style="min-height:36px">Hoy</button>
+      <button class="boton-icono" id="mes-sig" aria-label="Mes siguiente">›</button>
+    </div>
+    <div class="tarjeta" style="padding:10px 8px">
+      <div class="mes-grid cabecera">${['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((x) => `<span>${x}</span>`).join('')}</div>
+      <div class="mes-grid">${celdas}</div>
+      <p class="suave pequeno" style="margin:8px 4px 0">Los puntos son del color de cada asignatura · borde naranja = examen o entrega · gris = tarea.</p>
+    </div>
+    ${sel ? `<div class="tarjeta"><h2 class="mayus">${esc(fechaCorta(sel))}</h2>
+      ${evSel.length || tSel.length ? `<ul class="lista">${evSel.map((x) => lineaEvento(x)).join('')}${tSel.map(filaTarea).join('')}</ul>` : '<p class="suave">Nada este día.</p>'}
+      <button class="boton secundario ancho" id="evento-dia" style="margin-top:8px">＋ Evento este día</button>
+    </div>` : '<p class="suave pequeno" style="text-align:center">Toca un día para ver lo que tienes.</p>'}`;
+  const mover = (n) => {
+    const d = new Date(a, m - 1 + n, 1);
+    mesAgenda = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    pintarMes(cont);
+  };
+  $('#mes-ant', cont).onclick = () => mover(-1);
+  $('#mes-sig', cont).onclick = () => mover(1);
+  $('#mes-hoy', cont).onclick = () => {
+    mesAgenda = hoy().slice(0, 7);
+    diaMesSeleccionado = hoy();
+    pintarMes(cont);
+  };
+  for (const b of $$('[data-dia-mes]', cont)) b.onclick = () => ((diaMesSeleccionado = b.dataset.diaMes), pintarMes(cont));
+  if ($('#evento-dia', cont)) $('#evento-dia', cont).onclick = () => hojaFormEvento(null, sel);
+  enlazarListas(cont);
+  enlazarTareas(cont, () => pintarMes(cont));
+}
+
+// =====================================================================
+// COMPARTIR DESDE OTRAS APPS (Android: Compartir → Asistente Uni)
+// =====================================================================
+
+/** Si se ha compartido algo con la app, lo lleva a "Añadir información" ya rellenado. */
+async function recibirCompartido() {
+  if (!location.hash.includes('compartido') || !('caches' in window)) return;
+  try {
+    const cache = await caches.open('compartido');
+    const meta = await cache.match('meta');
+    if (!meta) return;
+    const { titulo, texto, url, archivos } = await meta.json();
+    let archivo = null;
+    if (archivos?.length) {
+      const r = await cache.match('archivo-0');
+      if (r) archivo = await leerArchivo(new File([await r.blob()], archivos[0].nombre, { type: archivos[0].tipo }));
+    }
+    for (const k of await cache.keys()) await cache.delete(k);
+    // Una web compartida suele venir como texto con el enlace dentro
+    const enlace = url || (texto || '').match(/https?:\/\/\S+/)?.[0];
+    if (archivo) {
+      modoAnadir = archivo.mimeType?.startsWith('image') ? 'imagen' : 'archivo';
+      archivoAnadir = archivo;
+    } else if (enlace && (texto || '').trim().length <= enlace.length + 60) {
+      modoAnadir = 'url';
+      compartidoAnadir = { url: enlace };
+    } else {
+      modoAnadir = 'texto';
+      compartidoAnadir = { titulo: titulo || '', texto: [texto, url].filter(Boolean).join('\n') };
+    }
+    history.replaceState(null, '', '#anadir');
+    aviso('📥 Recibido. Revisa y pulsa "Añadir al asistente".', 5000);
+  } catch (e) {
+    aviso(`No he podido recibir lo compartido: ${e.message}`);
+  }
 }
 
 // =====================================================================
@@ -1512,5 +1931,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Sin modo sin conexión:', e));
 }
 aplicarTema();
+await recibirCompartido();
 render();
 revisarAvisos();

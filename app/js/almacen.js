@@ -13,6 +13,9 @@ export function estadoVacio() {
     horario: [], // clases semanales
     cambiosClase: [], // cambios de un día concreto (laboratorio en vez de teoría, otra aula, cancelada, clase extra)
     notas: [],
+    calificaciones: [], // partes de la nota de cada asignatura (examen, prácticas...) con su peso y nota
+    faltas: [], // faltas a clases de laboratorio
+    tareas: [],
     historial: [],
     ajustes: {
       apiKey: '',
@@ -30,10 +33,10 @@ export function normalizarEstado(datos) {
   const base = estadoVacio();
   const e = { ...base, ...(datos || {}) };
   e.ajustes = { ...base.ajustes, ...(datos?.ajustes || {}) };
-  for (const k of ['asignaturas', 'eventos', 'recordatorios', 'avisosVistos', 'memoria', 'conocimiento', 'horario', 'cambiosClase', 'notas', 'historial']) {
+  for (const k of ['asignaturas', 'eventos', 'recordatorios', 'avisosVistos', 'memoria', 'conocimiento', 'horario', 'cambiosClase', 'notas', 'calificaciones', 'faltas', 'tareas', 'historial']) {
     if (!Array.isArray(e[k])) e[k] = [];
   }
-  const maxId = Math.max(0, ...['asignaturas', 'eventos', 'recordatorios', 'memoria', 'conocimiento', 'horario', 'cambiosClase', 'notas'].flatMap((k) => e[k].map((x) => Number(x.id) || 0)));
+  const maxId = Math.max(0, ...['asignaturas', 'eventos', 'recordatorios', 'memoria', 'conocimiento', 'horario', 'cambiosClase', 'notas', 'calificaciones', 'faltas', 'tareas'].flatMap((k) => e[k].map((x) => Number(x.id) || 0)));
   e.sigId = Math.max(Number(e.sigId) || 1, maxId + 1);
   return e;
 }
