@@ -283,3 +283,19 @@ test('modelo sin cuota gratuita (limit: 0) → cambia a otro', async () => {
   ]);
   assert.equal(await probarClave(almacen.estado.ajustes, g.fetchImpl), 'gemini-3.5-flash-lite');
 });
+
+test('claves nuevas "AQ.": se envían completas y los errores 401 se explican', async () => {
+  const { probarClave } = await import('../js/ia.js');
+  const ajustes = { apiKey: 'AQ.Ab8RN6Lclavedeprueba', modelo: 'gemini-3.8-flash' };
+  const g = geminiFalso([
+    { status: 401, json: { error: { message: 'Request had invalid authentication credentials.' } } }, // la lista de modelos falla
+    respTexto('OK'),
+  ]);
+  assert.equal(await probarClave(ajustes, g.fetchImpl), 'gemini-3.8-flash', 'si no puede leer la lista, prueba directamente');
+  assert.equal(g.peticiones[1].headers['x-goog-api-key'], 'AQ.Ab8RN6Lclavedeprueba');
+  const g2 = geminiFalso([
+    { status: 401, json: { error: { message: 'x' } } },
+    { status: 401, json: { error: { message: 'ACCESS_TOKEN_TYPE_UNSUPPORTED' } } },
+  ]);
+  await assert.rejects(probarClave(ajustes, g2.fetchImpl), /tipo de clave no admitido/);
+});

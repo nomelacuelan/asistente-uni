@@ -41,7 +41,10 @@ export function elegirModelo(nombres, evitar = []) {
 
 function errorDeGoogle(status, msg, modelo) {
   if (status === 429) return new ErrorIA('⏳ Has llegado al límite gratuito de la IA por ahora. Prueba en un minuto (o mañana si es el límite diario).');
-  if ((status === 400 || status === 403) && /api[ _-]?key/i.test(msg)) return new ErrorIA('🔑 La clave de IA no es válida. Cópiala otra vez de aistudio.google.com/apikey y pégala en ☰ Más → ⚙️ Ajustes.');
+  if ((status === 400 || status === 401 || status === 403) && /api[ _-]?key/i.test(msg)) return new ErrorIA('🔑 La clave de IA no es válida. Cópiala otra vez de aistudio.google.com/apikey y pégala en ☰ Más → ⚙️ Ajustes.');
+  if (status === 401) {
+    return new ErrorIA(`🔑 Google no acepta esta clave (${/ACCESS_TOKEN_TYPE_UNSUPPORTED/.test(msg) ? 'tipo de clave no admitido' : 'no autorizada'}). Prueba a crear una clave NUEVA en aistudio.google.com/apikey (botón "Create API key", en un proyecto nuevo) y pégala completa, incluido el "AQ." del principio.`);
+  }
   if (/location is not supported/i.test(msg)) return new ErrorIA('🌍 Google no permite usar su IA gratuita desde tu ubicación actual.');
   if (status === 403) return new ErrorIA(`🔑 Google ha rechazado la clave: ${msg}`);
   if (status === 404) return new ErrorIA(`El modelo "${modelo}" no está disponible para tu clave. Pulsa "Probar" en ⚙️ Ajustes para elegir uno automáticamente.`);
@@ -83,7 +86,7 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
     const msg = json.error?.message || `error ${res.status}`;
     if (modeloNoSirve(res.status, msg) && probados.length < 3) {
       probados.push(ajustes.modelo);
-      const otro = elegirModelo(await listarModelos(ajustes.apiKey, fetchImpl), probados);
+      const otro = elegirModelo((await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null)) || [], probados);
       if (otro) {
         console.warn(`Modelo ${ajustes.modelo} no disponible (${res.status}); uso ${otro}`);
         ajustes.modelo = otro;
@@ -246,8 +249,9 @@ ${contenido.slice(0, 100000)}`,
  */
 export async function probarClave(ajustes, fetchImpl) {
   if (!ajustes.apiKey) throw new ErrorIA('Pega primero la clave.');
-  const disponibles = await listarModelos(ajustes.apiKey, fetchImpl);
-  if (!disponibles.includes(ajustes.modelo)) ajustes.modelo = elegirModelo(disponibles) || ajustes.modelo;
+  // Si la lista de modelos no se puede leer con esta clave, se prueba directamente con el modelo configurado
+  const disponibles = await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null);
+  if (disponibles?.length && !disponibles.includes(ajustes.modelo)) ajustes.modelo = elegirModelo(disponibles) || ajustes.modelo;
   await llamarGemini({ ajustes, contents: [{ role: 'user', parts: [{ text: 'Responde solo: OK' }] }], fetchImpl });
   return ajustes.modelo;
 }

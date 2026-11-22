@@ -1359,7 +1359,7 @@ function vistaAjustes() {
     <form class="tarjeta" id="f-ia">
       <h2>🤖 Inteligencia artificial</h2>
       <p class="suave pequeno">La IA es gratuita (Google Gemini). Consigue tu clave en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> → <b>Create API key</b>, cópiala y pégala aquí. Se guarda solo en este móvil.</p>
-      <label class="campo"><span>Clave de IA</span><input name="apiKey" type="password" autocomplete="off" value="${esc(a.apiKey)}" placeholder="AIza…"></label>
+      <label class="campo"><span>Clave de IA</span><input name="apiKey" type="password" autocomplete="off" value="${esc(a.apiKey)}" placeholder="Pega aquí tu clave (AQ.… o AIza…)"></label>
       <label class="campo"><span>Modelo</span><input name="modelo" value="${esc(a.modelo)}"></label>
       <div class="fila-botones"><button type="button" class="boton" id="probar" style="flex:2">Guardar y probar</button><button class="boton secundario" style="flex:1">Solo guardar</button></div>
       <div id="estado-ia"></div>
