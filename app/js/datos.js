@@ -338,12 +338,13 @@ export function crearDatos(almacen) {
   const tipoClase = (t) => (TIPOS_CLASE.includes(t) ? t : 'teoria');
 
   async function crearClase(a) {
-    const asig = asignaturaOCrear(a.asignatura);
-    if (!asig) throw new Error('Falta la asignatura de la clase');
+    if (!a.asignatura?.trim()) throw new Error('Falta la asignatura de la clase');
+    // Primero se valida todo, para no dejar una asignatura creada si hay un error
     const dias = (Array.isArray(a.dias) ? a.dias : [a.dia ?? a.dias]).map(validarDia);
     const inicio = validarHora(a.inicio, 'hora de inicio');
     const fin = validarHora(a.fin, 'hora de fin');
     if (fin <= inicio) throw new Error('La hora de fin tiene que ser después de la de inicio');
+    const asig = asignaturaOCrear(a.asignatura);
     const creadas = [];
     for (const dia of [...new Set(dias)]) {
       const c = {
@@ -413,11 +414,14 @@ export function crearDatos(almacen) {
       await guardar();
       return { ok: true, cambio_id: cambio.id };
     }
+    if (!a.asignatura?.trim()) throw new Error('Para una clase extra hace falta la asignatura');
+    const inicio = validarHora(a.inicio, 'hora de inicio');
+    const fin = validarHora(a.fin, 'hora de fin');
+    if (fin <= inicio) throw new Error('La hora de fin tiene que ser después de la de inicio');
     const asig = asignaturaOCrear(a.asignatura);
-    if (!asig) throw new Error('Para una clase extra hace falta la asignatura');
     const extra = {
       id: almacen.nuevoId(), horarioId: null, fecha, asignaturaId: asig.id, tipo: tipoClase(a.tipo),
-      inicio: validarHora(a.inicio, 'hora de inicio'), fin: validarHora(a.fin, 'hora de fin'), aula: limpio(a.aula), nota: limpio(a.nota), cancelada: false,
+      inicio, fin, aula: limpio(a.aula), nota: limpio(a.nota), cancelada: false,
     };
     e().cambiosClase.push(extra);
     await guardar();

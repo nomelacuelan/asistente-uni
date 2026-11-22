@@ -182,7 +182,7 @@ test('horario: clases semanales, varios días a la vez y validaciones', async ()
   assert.deepEqual(h.map((c) => `${c.dia_nombre} ${c.inicio} ${c.asignatura}`), ['lunes 09:00 Física II', 'miércoles 08:00 Química', 'miércoles 09:00 Física II']);
   await assert.rejects(datos.crearClase({ asignatura: 'X', dia: 'lunes', inicio: '11:00', fin: '10:00' }), /después/);
   await assert.rejects(datos.crearClase({ asignatura: 'X', dia: 'funes', inicio: '10:00', fin: '11:00' }), /día no es válido/);
-  assert.equal(datos.verAsignaturas().length, 3, 'crea las asignaturas que no existían');
+  assert.deepEqual(datos.verAsignaturas().map((a) => a.nombre), ['Física II', 'Química'], 'crea las que faltan, pero no las de clases con error');
 });
 
 test('horario: un día concreto toca laboratorio, otro se cancela y hay una clase extra', async () => {

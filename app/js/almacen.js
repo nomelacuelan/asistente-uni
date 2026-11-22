@@ -64,10 +64,21 @@ const CLAVE = 'principal';
 
 function abrirIDB() {
   return new Promise((ok, mal) => {
+    // Si otra ventana de la app tiene bloqueada la base de datos, no se queda esperando para siempre
+    const limite = setTimeout(() => mal(new Error('BLOQUEADA')), 8000);
     const pet = indexedDB.open(NOMBRE_DB, 1);
     pet.onupgradeneeded = () => pet.result.createObjectStore(TABLA);
-    pet.onsuccess = () => ok(pet.result);
-    pet.onerror = () => mal(pet.error);
+    pet.onsuccess = () => {
+      clearTimeout(limite);
+      const db = pet.result;
+      // Si otra ventana necesita actualizar la base de datos, esta la suelta en vez de bloquearla
+      db.onversionchange = () => db.close();
+      ok(db);
+    };
+    pet.onerror = () => {
+      clearTimeout(limite);
+      mal(pet.error);
+    };
   });
 }
 

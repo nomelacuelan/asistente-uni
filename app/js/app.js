@@ -5,7 +5,20 @@ import { conversar, extraerContenido, organizarInformacion, probarClave, ErrorIA
 import { crearICS, enlaceGoogle, enlaceGoogleRecordatorio } from './calendario.js';
 import { ahora, hoy, bonito, diasHasta, tieneHora, sumarDias, aDate } from './fechas.js';
 
-const almacen = await abrirAlmacenNavegador();
+let almacen;
+try {
+  almacen = await abrirAlmacenNavegador();
+} catch (e) {
+  // En vez de una pantalla en blanco, explica qué hacer
+  document.querySelector('#contenido').innerHTML = `<div style="padding:24px 4px">
+    <h2>⚠️ No puedo abrir tus datos</h2>
+    <p>${e.message === 'BLOQUEADA'
+      ? 'La app parece estar abierta en otra ventana o pestaña que está bloqueando tus datos. Ciérrala (o cierra Chrome del todo) y vuelve a abrir la app.'
+      : `El navegador no deja guardar datos (${String(e.message || e)}). Comprueba que no estás en modo incógnito y que Chrome tiene espacio libre.`}</p>
+    <button onclick="location.reload()" style="min-height:44px;padding:0 16px;border-radius:12px;border:0;background:#0f6b53;color:#fff;font-weight:600">Reintentar</button>
+  </div>`;
+  throw e;
+}
 const datos = crearDatos(almacen);
 const E = () => almacen.estado;
 
@@ -166,7 +179,7 @@ function hojaCalendario({ eventos = [], recordatorios = [], titulo }) {
      <p class="suave pequeno">Abre Google Calendar con el evento ya rellenado; solo tienes que pulsar Guardar.</p>` : `<p class="suave pequeno">En Android con Google Calendar, abre cada evento desde la Agenda y usa el botón de Google Calendar.</p>`}
      <button class="boton secundario ancho" id="cal-cerrar" style="margin-top:8px">Cerrar</button>`,
     (h) => {
-      $('#cal-ics', h).onclick = () => compartirICS(`${titulo.replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 40) || 'asistente'}.ics`, crearICS({ eventos, recordatorios, ajustes: E().ajustes }));
+      $('#cal-ics', h).onclick = () => compartirICS(eventos.length + recordatorios.length === 1 ? `${titulo.replace(/[^\p{L}\p{N} _-]/gu, '').trim().slice(0, 40) || 'evento'}.ics` : 'universidad.ics', crearICS({ eventos, recordatorios, ajustes: E().ajustes }));
       $('#cal-cerrar', h).onclick = cerrarHoja;
     },
   );
@@ -326,6 +339,8 @@ function vistaHoy() {
 // =====================================================================
 
 let adjuntosChat = [];
+let archivosPreparando = 0;
+let preparandoArchivos = Promise.resolve();
 let chatOcupado = false;
 
 const SUGERENCIAS = [
@@ -386,15 +401,22 @@ function vistaChat() {
           cerrarHoja();
           const f = await elegirArchivo(accept, capture);
           if (!f) return;
-          try {
-            const a = await leerArchivo(f);
-            if (a.texto !== undefined) {
-              entrada.value = `${entrada.value}\n\nContenido de ${a.nombre}:\n${a.texto}`.trim();
-            } else adjuntosChat.push(a);
-            pintarAdjuntos();
-          } catch (e) {
-            aviso(e.message);
-          }
+          // Mientras se prepara (las fotos se reducen), se ve "Preparando…" y el envío espera
+          archivosPreparando++;
+          pintarAdjuntos();
+          const tarea = leerArchivo(f)
+            .then((a) => {
+              const caja = $('#entrada');
+              if (a.texto !== undefined) {
+                if (caja) caja.value = `${caja.value}\n\nContenido de ${a.nombre}:\n${a.texto}`.trim();
+              } else adjuntosChat.push(a);
+            })
+            .catch((e) => aviso(e.message))
+            .finally(() => {
+              archivosPreparando--;
+              pintarAdjuntos();
+            });
+          preparandoArchivos = Promise.all([preparandoArchivos, tarea]);
         };
         $('#adj-camara', h).onclick = () => coger('image/*', true);
         $('#adj-foto', h).onclick = () => coger('image/*');
@@ -417,7 +439,9 @@ function burbuja(rol, texto, extra = '') {
 function pintarAdjuntos() {
   const cont = $('#adjuntos');
   if (!cont) return;
-  cont.innerHTML = adjuntosChat.map((a, i) => `<span class="adjunto">${a.mimeType.startsWith('image') ? '🖼️' : '📄'} ${esc(a.nombre)}<button data-quitar="${i}" aria-label="Quitar">✕</button></span>`).join('');
+  cont.innerHTML =
+    adjuntosChat.map((a, i) => `<span class="adjunto">${a.mimeType.startsWith('image') ? '🖼️' : '📄'} ${esc(a.nombre)}<button data-quitar="${i}" aria-label="Quitar">✕</button></span>`).join('') +
+    (archivosPreparando ? '<span class="adjunto" style="padding-right:10px">⏳ Preparando archivo…</span>' : '');
   for (const b of $$('[data-quitar]', cont)) {
     b.onclick = () => {
       adjuntosChat.splice(Number(b.dataset.quitar), 1);
@@ -434,6 +458,15 @@ const NOMBRE_ACCION = {
 
 async function enviarChat() {
   if (chatOcupado) return;
+  if (archivosPreparando) {
+    // Espera a que termine de cargarse la foto o el archivo antes de enviar
+    chatOcupado = true;
+    $('#enviar').disabled = true;
+    await preparandoArchivos;
+    chatOcupado = false;
+    if (!$('#enviar')) return;
+    $('#enviar').disabled = false;
+  }
   const entrada = $('#entrada');
   const texto = entrada.value.trim();
   if (!texto && !adjuntosChat.length) return;
@@ -481,6 +514,7 @@ let seccionAgenda = 'eventos';
 let verPasados = false;
 
 function vistaAgenda() {
+  if (vistaActual !== 'agenda') return; // el usuario ya se ha ido a otra pantalla
   const secciones = { eventos: 'Eventos', asignaturas: 'Asignaturas', recordatorios: 'Avisos', memoria: 'Memoria' };
   contenido.innerHTML = `
     <div class="segmentos" role="tablist">${Object.entries(secciones).map(([k, v]) => `<button role="tab" class="${k === seccionAgenda ? 'activo' : ''}" data-sec="${k}">${v}</button>`).join('')}</div>
@@ -768,11 +802,13 @@ function seccionMemoria(cont) {
 
 let modoAnadir = 'texto';
 let archivoAnadir = null;
+let cargandoAnadir = false;
 let procesando = false;
 
 const ICONO_DOC = { texto: '✍️', url: '🔗', archivo: '📄', imagen: '🖼️' };
 
 function vistaAnadir() {
+  if (vistaActual !== 'anadir') return; // el usuario ya se ha ido a otra pantalla
   const modos = { texto: '✍️ Escribir', url: '🔗 Web', archivo: '📄 Archivo', imagen: '🖼️ Imagen' };
   const docs = [...E().conocimiento].reverse();
   let formulario = '';
@@ -819,12 +855,16 @@ function vistaAnadir() {
   const coger = async (accept, capture) => {
     const f = await elegirArchivo(accept, capture);
     if (!f) return;
+    cargandoAnadir = true;
+    if ($('#zona')) $('#zona').innerHTML = '<span class="grande">⏳</span><b>Preparando archivo…</b>';
+    if ($('#b-anadir')) $('#b-anadir').disabled = true;
     try {
       archivoAnadir = await leerArchivo(f);
-      vistaAnadir();
     } catch (e) {
       aviso(e.message);
     }
+    cargandoAnadir = false;
+    vistaAnadir();
   };
   if ($('#zona')) $('#zona').onclick = () => coger(modoAnadir === 'imagen' ? 'image/*' : 'application/pdf,text/*,.txt,.md,.csv,.json');
   if ($('#camara')) $('#camara').onclick = () => coger('image/*', true);
@@ -843,6 +883,7 @@ async function procesarAnadir(form) {
     if ($('#resultado')) $('#resultado').innerHTML = `<p class="suave">${t}</p>`;
   };
 
+  if (cargandoAnadir) return aviso('Espera a que termine de cargar el archivo');
   if ((modoAnadir === 'archivo' || modoAnadir === 'imagen') && !archivoAnadir) return aviso('Primero elige un archivo');
   if (modoAnadir !== 'texto' && !ajustes.apiKey) return aviso('🔑 Para leer webs, archivos e imágenes necesitas la clave de IA (Ajustes)');
 
@@ -880,12 +921,15 @@ async function procesarAnadir(form) {
       resumen = 'Guardado. (Sin clave de IA no puedo pasar las fechas a la agenda automáticamente.)';
     }
     procesando = false;
+    if (vistaActual !== 'anadir') return aviso(`✓ Añadido: ${doc.titulo}`, 5000);
     vistaAnadir();
     $('#resultado').innerHTML = `<div class="tarjeta destacada"><b>✓ Añadido: ${esc(doc.titulo)}</b>${resumen ? `<div class="texto-ia" style="margin-top:6px">${formatear(resumen)}</div>` : ''}</div>`;
   } catch (e) {
     procesando = false;
+    const msg = e instanceof ErrorIA ? e.message : `❌ ${e.message}`;
+    if (vistaActual !== 'anadir') return aviso(msg, 7000);
     vistaAnadir();
-    $('#resultado').innerHTML = `<div class="tarjeta alerta">${esc(e instanceof ErrorIA ? e.message : `❌ ${e.message}`)}</div>`;
+    $('#resultado').innerHTML = `<div class="tarjeta alerta">${esc(msg)}</div>`;
   } finally {
     procesando = false;
     actualizarGlobo();
@@ -962,7 +1006,13 @@ function filaClase(c, marcarAhora = false) {
 }
 
 function vistaHorario() {
-  diaHorario ||= hoy();
+  if (vistaActual !== 'horario') return; // el usuario ya se ha ido a otra pantalla
+  if (!diaHorario) {
+    diaHorario = hoy();
+    // En fin de semana sin clases, muestra directamente el lunes siguiente
+    const d = aDate(diaHorario).getDay();
+    if ((d === 6 || d === 0) && !datos.clasesDelDia(diaHorario).length) diaHorario = sumarDias(diaHorario, d === 6 ? 2 : 1);
+  }
   const lunes = lunesDe(diaHorario);
   const finde = [5, 6].some((i) => datos.clasesDelDia(sumarDias(lunes, i)).length);
   const nDias = finde ? 7 : 5;
@@ -1011,7 +1061,7 @@ function vistaHorario() {
   for (const b of $$('[data-dia]')) b.onclick = () => ((diaHorario = b.dataset.dia), vistaHorario());
   $('#sem-ant').onclick = () => ((diaHorario = sumarDias(diaHorario, -7)), vistaHorario());
   $('#sem-sig').onclick = () => ((diaHorario = sumarDias(diaHorario, 7)), vistaHorario());
-  $('#sem-hoy').onclick = () => ((diaHorario = hoy()), vistaHorario());
+  $('#sem-hoy').onclick = () => ((diaHorario = null), vistaHorario());
   $('#nueva-clase').onclick = () => hojaFormClase();
   $('#clase-extra').onclick = () => hojaCambioDia({ fecha: diaHorario });
   if ($('#ver-todas')) $('#ver-todas').onclick = hojaTodasClases;
@@ -1178,6 +1228,7 @@ function hojaTodasClases() {
 let filtroNotas = { texto: '', asignatura: '' };
 
 function vistaNotas() {
+  if (vistaActual !== 'notas') return; // el usuario ya se ha ido a otra pantalla
   const asigs = [...new Set(E().notas.map((n) => E().asignaturas.find((a) => a.id === n.asignaturaId)?.nombre).filter(Boolean))].sort();
   contenido.innerHTML = `
     <div class="fila-botones" style="margin-top:0">
@@ -1288,6 +1339,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => ap
 // =====================================================================
 
 function vistaAjustes() {
+  if (vistaActual !== 'ajustes') return; // el usuario ya se ha ido a otra pantalla
   const a = E().ajustes;
   const instalada = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const esIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
