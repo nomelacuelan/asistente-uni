@@ -5,6 +5,9 @@ import { conversar, extraerContenido, organizarInformacion, probarClave, ErrorIA
 import { crearICS, enlaceGoogle, enlaceGoogleRecordatorio } from './calendario.js';
 import { ahora, hoy, bonito, diasHasta, tieneHora, sumarDias, aDate } from './fechas.js';
 
+// Número de versión que se ve en Ajustes (súbelo junto con VERSION en sw.js)
+const VERSION_APP = 9;
+
 let almacen;
 try {
   almacen = await abrirAlmacenNavegador();
@@ -1810,7 +1813,14 @@ function vistaAjustes() {
         <button class="boton peligro" id="borrar-todo" style="flex:1">Borrar todo</button>
       </div>
     </div>
+    <div class="tarjeta">
+      <h2>🔄 Versión de la app</h2>
+      <p style="margin:0 0 8px">Tienes la versión <b>${VERSION_APP}</b>. La app se actualiza sola cuando hay una nueva.</p>
+      <button class="boton secundario ancho" id="actualizar">Buscar actualización ahora</button>
+      <p class="suave pequeno">No borra ninguno de tus datos.</p>
+    </div>
     <p class="suave pequeno" style="text-align:center">Asistente Uni · tus datos no salen del móvil salvo lo que envías a la IA para que te responda.</p>`;
+  $('#actualizar').onclick = buscarActualizacion;
 
   for (const b of $$('[data-tema]')) {
     b.onclick = async () => {
@@ -1928,7 +1938,33 @@ document.addEventListener('visibilitychange', () => document.visibilityState ===
 // ---------- arranque ----------
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch((e) => console.warn('Sin modo sin conexión:', e));
+  // updateViaCache: 'none' → al buscar una versión nueva, nunca usa archivos guardados por el navegador
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
+    // Busca versión nueva cada vez que vuelves a la app
+    document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && reg.update().catch(() => {}));
+  }).catch((e) => console.warn('Sin modo sin conexión:', e));
+  // Cuando llega una versión nueva, la app se recarga sola una vez para usarla
+  const habiaVersion = Boolean(navigator.serviceWorker.controller);
+  let recargando = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!habiaVersion || recargando) return;
+    recargando = true;
+    if (!$('#hoja').hidden || chatOcupado || procesando) return aviso('🔄 Hay una versión nueva. Cierra y abre la app para usarla.', 8000);
+    location.reload();
+  });
+}
+
+/** Fuerza a descargar la última versión de la app (no toca tus datos). */
+async function buscarActualizacion() {
+  aviso('🔄 Buscando la última versión…', 4000);
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    await reg?.update();
+    for (const k of await caches.keys()) if (k !== 'compartido') await caches.delete(k);
+    // Vuelve a pedir al servidor los archivos de la app saltándose la caché del navegador
+    await Promise.all(['./', 'index.html', 'css/estilos.css', 'js/app.js', 'js/almacen.js', 'js/datos.js', 'js/fechas.js', 'js/herramientas.js', 'js/ia.js', 'js/calendario.js', 'manifest.webmanifest'].map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
+  } catch {}
+  location.reload();
 }
 aplicarTema();
 await recibirCompartido();

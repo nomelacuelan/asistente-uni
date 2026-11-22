@@ -1,5 +1,6 @@
-// Permite abrir la app sin conexión. Cuando subas una versión nueva, cambia el número de VERSION.
-const VERSION = 'asistente-uni-v8';
+// Permite abrir la app sin conexión y la mantiene siempre actualizada.
+// Cuando subas una versión nueva, cambia el número de VERSION (y VERSION_APP en js/app.js).
+const VERSION = 'asistente-uni-v9';
 const ARCHIVOS = [
   './',
   './index.html',
@@ -19,7 +20,12 @@ const ARCHIVOS = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
+  // cache: 'reload' → descarga los archivos del servidor, nunca de la caché del navegador
+  e.waitUntil(
+    caches.open(VERSION)
+      .then((c) => c.addAll(ARCHIVOS.map((u) => new Request(u, { cache: 'reload' }))))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (e) => {
@@ -30,8 +36,6 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Archivos de la app: primero la red (para tener siempre la última versión) y, si no hay conexión, la copia guardada.
-// Las llamadas a la IA (otro dominio) no se tocan.
 // "Compartir → Asistente Uni" desde otra app (Android): Chrome envía lo compartido aquí.
 // Se guarda un momento y se abre la app en "Añadir información".
 async function recibirCompartido(request) {
@@ -49,6 +53,8 @@ async function recibirCompartido(request) {
   return Response.redirect('./?compartido=1#anadir-compartido', 303);
 }
 
+// Archivos de la app: siempre se pregunta al servidor si hay versión nueva (cache: 'no-cache');
+// si no hay conexión, se usa la copia guardada. Las llamadas a la IA (otro dominio) no se tocan.
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method === 'POST' && url.pathname.endsWith('/compartir')) {
@@ -57,7 +63,7 @@ self.addEventListener('fetch', (e) => {
   }
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) {
           const copia = res.clone();
