@@ -48,6 +48,7 @@ function errorDeGoogle(status, msg, modelo) {
   if (/location is not supported/i.test(msg)) return new ErrorIA('🌍 Google no permite usar su IA gratuita desde tu ubicación actual.');
   if (status === 403) return new ErrorIA(`🔑 Google ha rechazado la clave: ${msg}`);
   if (status === 404) return new ErrorIA(`El modelo "${modelo}" no está disponible para tu clave. Pulsa "Probar" en ⚙️ Ajustes para elegir uno automáticamente.`);
+  if (status === 503 || status === 500) return new ErrorIA('🚦 Los servidores de IA de Google están saturados ahora mismo (no es un fallo de tu app ni de tu clave). Vuelve a intentarlo en unos minutos.');
   return new ErrorIA(`La IA ha dado un error (${status}): ${msg}`);
 }
 
@@ -68,11 +69,16 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
   if (sistema) cuerpo.systemInstruction = { parts: [{ text: sistema }] };
   if (tools) cuerpo.tools = tools;
   const probados = [];
+  const saturados = [];
+  // Si hace poco el modelo principal estaba saturado, se sigue usando el de reserva un rato
+  // (así toda una conversación usa el mismo modelo)
+  const reserva = respaldo.get(ajustes.apiKey);
+  let modeloUso = reserva && reserva.hasta > Date.now() && reserva.principal === ajustes.modelo ? reserva.modelo : ajustes.modelo;
 
   for (let intento = 0; ; intento++) {
     let res;
     try {
-      res = await fetchImpl(`${URL_API}/${encodeURIComponent(ajustes.modelo)}:generateContent`, {
+      res = await fetchImpl(`${URL_API}/${encodeURIComponent(modeloUso)}:generateContent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ajustes.apiKey },
         body: JSON.stringify(cuerpo),
@@ -84,23 +90,50 @@ export async function llamarGemini({ ajustes, apiKey, modelo, sistema, contents,
     if (res.ok) return json;
 
     const msg = json.error?.message || `error ${res.status}`;
+
+    // 1) Ese modelo no existe o no es gratis para tu clave → se cambia para siempre
     if (modeloNoSirve(res.status, msg) && probados.length < 3) {
-      probados.push(ajustes.modelo);
+      probados.push(modeloUso);
       const otro = elegirModelo((await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null)) || [], probados);
       if (otro) {
-        console.warn(`Modelo ${ajustes.modelo} no disponible (${res.status}); uso ${otro}`);
-        ajustes.modelo = otro;
+        console.warn(`Modelo ${modeloUso} no disponible (${res.status}); uso ${otro}`);
+        ajustes.modelo = modeloUso = otro;
         continue;
       }
     }
-    const temporal = res.status === 429 || res.status === 500 || res.status === 503;
-    if (temporal && intento < 2) {
-      await new Promise((r) => setTimeout(r, 4000 * (intento + 1)));
+
+    // 2) Google está saturado (503/500) → un reintento rápido y, si sigue, otro modelo de reserva durante 15 min
+    if ((res.status === 503 || res.status === 500) && saturados.length < 3) {
+      if (!saturados.includes(modeloUso) && intento === 0) {
+        saturados.push(modeloUso);
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      if (!saturados.includes(modeloUso)) saturados.push(modeloUso);
+      const lista = (await listarModelos(ajustes.apiKey, fetchImpl).catch(() => null)) || MODELOS_RESERVA;
+      const otro = elegirModelo(lista, [...saturados, ...probados]);
+      if (otro) {
+        console.warn(`Modelo ${modeloUso} saturado; uso ${otro} un rato`);
+        modeloUso = otro;
+        respaldo.set(ajustes.apiKey, { principal: ajustes.modelo, modelo: otro, hasta: Date.now() + 15 * 60 * 1000 });
+        continue;
+      }
+    }
+
+    // 3) Límite por minuto → esperar un poco y reintentar
+    if (res.status === 429 && intento < 2) {
+      await new Promise((r) => setTimeout(r, 5000 * (intento + 1)));
       continue;
     }
-    throw errorDeGoogle(res.status, msg, ajustes.modelo);
+    throw errorDeGoogle(res.status, msg, modeloUso);
   }
 }
+
+// Modelos de reserva si no se puede leer la lista de Google
+const MODELOS_RESERVA = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+const respaldo = new Map();
+/** Solo para pruebas */
+export const olvidarRespaldo = () => respaldo.clear();
 
 const textoDe = (resp) =>
   (resp.candidates?.[0]?.content?.parts || [])

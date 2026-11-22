@@ -299,3 +299,35 @@ test('claves nuevas "AQ.": se envían completas y los errores 401 se explican', 
   ]);
   await assert.rejects(probarClave(ajustes, g2.fetchImpl), /tipo de clave no admitido/);
 });
+
+test('Google saturado (503): reintenta y, si sigue, usa un modelo de reserva', async () => {
+  const { olvidarRespaldo } = await import('../js/ia.js');
+  olvidarRespaldo();
+  const { datos, almacen } = nuevo();
+  const saturado = { status: 503, json: { error: { message: 'This model is currently experiencing high demand.' } } };
+  const g = geminiFalso([
+    saturado, // 1er intento
+    saturado, // reintento
+    { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-3.6-flash', supportedGenerationMethods: ['generateContent'] }] },
+    respTexto('Hola desde el modelo de reserva'),
+    respTexto('Sigo con el de reserva'),
+  ]);
+  const r = await conversar({ datos, almacen, texto: 'hola', fetchImpl: g.fetchImpl });
+  assert.equal(r.texto, 'Hola desde el modelo de reserva');
+  assert.match(g.peticiones[3].url, /gemini-3\.6-flash:/);
+  assert.equal(almacen.estado.ajustes.modelo, 'gemini-3.8-flash', 'el modelo principal no se cambia para siempre');
+  await conversar({ datos, almacen, texto: 'otra', fetchImpl: g.fetchImpl });
+  assert.match(g.peticiones[4].url, /gemini-3\.6-flash:/, 'durante un rato sigue con el de reserva');
+  olvidarRespaldo();
+});
+
+test('si todos los modelos están saturados, mensaje claro', async () => {
+  const { olvidarRespaldo } = await import('../js/ia.js');
+  olvidarRespaldo();
+  const { datos, almacen } = nuevo();
+  const saturado = { status: 503, json: { error: { message: 'high demand' } } };
+  const lista = { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }] };
+  const g = geminiFalso([saturado, saturado, lista]);
+  await assert.rejects(conversar({ datos, almacen, texto: 'hola', fetchImpl: g.fetchImpl }), /saturados ahora mismo/);
+  olvidarRespaldo();
+});
